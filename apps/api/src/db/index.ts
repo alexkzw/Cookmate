@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import type { Equipment } from "@cookable/shared";
 import { config } from "../config.js";
 
 /**
@@ -37,7 +38,8 @@ CREATE TABLE IF NOT EXISTS pantry_items (
 CREATE TABLE IF NOT EXISTS preferences (
   user_id  TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   dislikes TEXT NOT NULL DEFAULT '[]',   -- JSON array
-  dietary  TEXT NOT NULL DEFAULT '[]'    -- JSON array
+  dietary  TEXT NOT NULL DEFAULT '[]',   -- JSON array
+  cookware TEXT NOT NULL DEFAULT '[]'    -- JSON array of Equipment enum values
 );
 
 -- One row per recipe generation. This table IS the answer to
@@ -84,6 +86,21 @@ CREATE INDEX IF NOT EXISTS idx_turns_user_created ON turns(user_id, created_at D
 CREATE INDEX IF NOT EXISTS idx_turns_created ON turns(created_at DESC);
 `);
 
+/**
+ * Tiny forward-only migration helper. `CREATE TABLE IF NOT EXISTS` above only
+ * covers fresh databases — an existing dev database predates the cookware
+ * column, so add it in place rather than making people delete their data.
+ */
+function addColumnIfMissing(table: string, column: string, definition: string): void {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+
+addColumnIfMissing("preferences", "cookware", "TEXT NOT NULL DEFAULT '[]'");
+addColumnIfMissing("turns", "cookware_json", "TEXT");
+
 export function upsertUser(id: string, email: string | null, displayName: string | null): void {
   db.prepare(
     `INSERT INTO users (id, email, display_name) VALUES (?, ?, ?)
@@ -117,22 +134,32 @@ export function setPantry(userId: string, items: string[]): void {
 export interface Preferences {
   dislikes: string[];
   dietary: string[];
+  cookware: Equipment[];
 }
 
 export function getPreferences(userId: string): Preferences {
   const row = db
-    .prepare(`SELECT dislikes, dietary FROM preferences WHERE user_id = ?`)
-    .get(userId) as { dislikes: string; dietary: string } | undefined;
-  if (!row) return { dislikes: [], dietary: [] };
+    .prepare(`SELECT dislikes, dietary, cookware FROM preferences WHERE user_id = ?`)
+    .get(userId) as { dislikes: string; dietary: string; cookware: string } | undefined;
+  if (!row) return { dislikes: [], dietary: [], cookware: [] };
   return {
     dislikes: JSON.parse(row.dislikes) as string[],
     dietary: JSON.parse(row.dietary) as string[],
+    cookware: JSON.parse(row.cookware) as Equipment[],
   };
 }
 
 export function setPreferences(userId: string, prefs: Preferences): void {
   db.prepare(
-    `INSERT INTO preferences (user_id, dislikes, dietary) VALUES (?, ?, ?)
-     ON CONFLICT(user_id) DO UPDATE SET dislikes = excluded.dislikes, dietary = excluded.dietary`,
-  ).run(userId, JSON.stringify(prefs.dislikes), JSON.stringify(prefs.dietary));
+    `INSERT INTO preferences (user_id, dislikes, dietary, cookware) VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET
+       dislikes = excluded.dislikes,
+       dietary  = excluded.dietary,
+       cookware = excluded.cookware`,
+  ).run(
+    userId,
+    JSON.stringify(prefs.dislikes),
+    JSON.stringify(prefs.dietary),
+    JSON.stringify(prefs.cookware),
+  );
 }

@@ -18,8 +18,9 @@ import type { CacheStatus } from "../llm/models.js";
 export function openTurn(userId: string, request: CookRequest): string {
   const id = randomUUID();
   db.prepare(
-    `INSERT INTO turns (id, user_id, craving, servings, max_minutes, effort, will_shop, pantry_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO turns
+       (id, user_id, craving, servings, max_minutes, effort, will_shop, pantry_json, cookware_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     userId,
@@ -29,6 +30,7 @@ export function openTurn(userId: string, request: CookRequest): string {
     request.effort,
     request.willShop ? 1 : 0,
     JSON.stringify(request.pantry),
+    JSON.stringify(request.cookware),
   );
   return id;
 }

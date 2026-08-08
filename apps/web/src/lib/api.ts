@@ -1,4 +1,4 @@
-import type { Feedback, Stats } from "@cookable/shared";
+import type { Equipment, Feedback, Stats } from "@cookable/shared";
 import { getAccessToken } from "./supabase";
 
 async function authHeaders(): Promise<Record<string, string>> {
@@ -13,6 +13,7 @@ export interface PantryState {
   pantry: string[];
   dislikes: string[];
   dietary: string[];
+  cookware: Equipment[];
 }
 
 export async function fetchPantry(): Promise<PantryState> {

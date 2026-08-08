@@ -16,6 +16,7 @@ const baseRequest: CookRequest = {
   pantry: ["chicken thighs", "onion", "rice", "soy sauce"],
   dislikes: ["coriander"],
   dietary: [],
+  cookware: ["stovetop", "oven"],
 };
 
 function recipe(overrides: Partial<Recipe> = {}): Recipe {
@@ -34,8 +35,22 @@ function recipe(overrides: Partial<Recipe> = {}): Recipe {
       { name: "salt", quantity: 0, unit: "to_taste", source: "staple", substitute: null },
     ],
     steps: [
-      { number: 1, instruction: "Dice the onion.", minutes: 3, uses: ["onion"] },
-      { number: 2, instruction: "Sear the chicken.", minutes: 10, uses: ["chicken thigh"] },
+      {
+        number: 1,
+        instruction: "Dice the onion.",
+        minutes: 3,
+        handsOff: false,
+        equipment: ["knife", "chopping board"],
+        uses: ["onion"],
+      },
+      {
+        number: 2,
+        instruction: "Sear the chicken.",
+        minutes: 10,
+        handsOff: false,
+        equipment: ["stovetop", "frying pan"],
+        uses: ["chicken thigh"],
+      },
     ],
     tips: [],
     ...overrides,
@@ -169,7 +184,16 @@ describe("verifyRecipe", () => {
 
   it("flags step times that exceed the stated total", () => {
     const r = recipe({
-      steps: [{ number: 1, instruction: "Braise.", minutes: 90, uses: [] }],
+      steps: [
+        {
+          number: 1,
+          instruction: "Braise.",
+          minutes: 90,
+          handsOff: true,
+          equipment: ["oven"],
+          uses: [],
+        },
+      ],
     });
     expect(verifyRecipe(r, baseRequest).violations.map((v) => v.kind)).toContain(
       "step_time_mismatch",
@@ -197,5 +221,131 @@ describe("verifyRecipe", () => {
     expect(verifyRecipe(recipe({ servings: 4 }), baseRequest).violations.map((v) => v.kind)).toContain(
       "servings_mismatch",
     );
+  });
+});
+
+describe("equipment", () => {
+  it("rejects a recipe needing an appliance the user doesn't own", () => {
+    const r = recipe({
+      steps: [
+        {
+          number: 1,
+          instruction: "Air fry the chicken until crisp.",
+          minutes: 15,
+          handsOff: true,
+          equipment: ["air fryer"],
+          uses: ["chicken thigh"],
+        },
+      ],
+    });
+    const result = verifyRecipe(r, baseRequest); // owns stovetop + oven only
+    expect(result.ok).toBe(false);
+    const violation = result.violations.find((v) => v.kind === "missing_equipment");
+    expect(violation?.subject).toBe("air fryer");
+  });
+
+  it("accepts the same recipe once the user owns the appliance", () => {
+    const r = recipe({
+      steps: [
+        {
+          number: 1,
+          instruction: "Air fry the chicken until crisp.",
+          minutes: 15,
+          handsOff: true,
+          equipment: ["air fryer"],
+          uses: ["chicken thigh"],
+        },
+      ],
+    });
+    const result = verifyRecipe(r, { ...baseRequest, cookware: ["air fryer"] });
+    expect(result.violations.some((v) => v.kind === "missing_equipment")).toBe(false);
+    expect(result.equipmentUsed).toContain("air fryer");
+  });
+
+  it("never flags universal hand tools, even with no appliances declared", () => {
+    const r = recipe({
+      steps: [
+        {
+          number: 1,
+          instruction: "Slice everything thinly and toss in a bowl.",
+          minutes: 8,
+          handsOff: false,
+          equipment: ["knife", "chopping board", "mixing bowl"],
+          uses: ["onion"],
+        },
+      ],
+    });
+    const result = verifyRecipe(r, { ...baseRequest, cookware: [] });
+    expect(result.violations.some((v) => v.kind === "missing_equipment")).toBe(false);
+  });
+
+  it("reports one violation per missing appliance, not one per step", () => {
+    const r = recipe({
+      steps: [
+        {
+          number: 1,
+          instruction: "Blend half the sauce.",
+          minutes: 2,
+          handsOff: false,
+          equipment: ["blender"],
+          uses: [],
+        },
+        {
+          number: 2,
+          instruction: "Blend the rest.",
+          minutes: 2,
+          handsOff: false,
+          equipment: ["blender"],
+          uses: [],
+        },
+      ],
+    });
+    const result = verifyRecipe(r, baseRequest);
+    expect(result.violations.filter((v) => v.kind === "missing_equipment")).toHaveLength(1);
+  });
+});
+
+describe("active vs passive time", () => {
+  it("splits hands-on from walk-away time", () => {
+    const r = recipe({
+      prepMinutes: 10,
+      cookMinutes: 50,
+      steps: [
+        {
+          number: 1,
+          instruction: "Brown the chicken.",
+          minutes: 8,
+          handsOff: false,
+          equipment: ["stovetop", "frying pan"],
+          uses: ["chicken thigh"],
+        },
+        {
+          number: 2,
+          instruction: "Cover and braise in the oven.",
+          minutes: 45,
+          handsOff: true,
+          equipment: ["oven"],
+          uses: [],
+        },
+        {
+          number: 3,
+          instruction: "Scatter over the spring onion and serve.",
+          minutes: 2,
+          handsOff: false,
+          equipment: [],
+          uses: ["onion"],
+        },
+      ],
+    });
+    const result = verifyRecipe(r, { ...baseRequest, maxMinutes: 60 });
+    expect(result.activeMinutes).toBe(10); // 8 + 2
+    expect(result.passiveMinutes).toBe(45);
+    expect(result.totalMinutes).toBe(60);
+  });
+
+  it("reports zero passive time when every step is hands-on", () => {
+    const result = verifyRecipe(recipe(), baseRequest);
+    expect(result.passiveMinutes).toBe(0);
+    expect(result.activeMinutes).toBe(13);
   });
 });

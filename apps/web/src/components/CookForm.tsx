@@ -4,7 +4,10 @@ import clsx from "clsx";
 import { EFFORT_LEVELS, type CookRequest } from "@cookable/shared";
 
 /** What the client is allowed to choose. The rest is server-owned state. */
-export type CookFormValues = Omit<CookRequest, "pantry" | "dislikes" | "dietary">;
+export type CookFormValues = Omit<
+  CookRequest,
+  "pantry" | "dislikes" | "dietary" | "cookware"
+>;
 
 const TIME_PRESETS = [15, 30, 45, 90] as const;
 

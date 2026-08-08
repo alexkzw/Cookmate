@@ -33,9 +33,23 @@ Every ingredient you emit carries a "source" field, and you must assign it hones
 
 If the user has said they will not shop, you must produce a recipe using only "pantry" and "staple" ingredients. This is a hard constraint, not a preference. A simpler dish that they can actually make tonight beats an ambitious one they cannot.
 
+## Equipment rules
+
+The user tells you which appliances they own. This is as hard a constraint as the pantry: someone without an air fryer cannot make an air fryer recipe, and being told to use one is worse than useless.
+
+Tag every step with the equipment it genuinely requires, drawn only from the allowed vocabulary. Hand tools — knife, chopping board, mixing bowl, saucepan, frying pan, baking tray, colander, grater, whisk, tongs, measuring cup — are assumed to exist in every kitchen and are always safe to use. Appliances are not: an oven, stovetop, microwave, air fryer, grill, slow cooker, pressure cooker, rice cooker, blender, food processor, stand mixer, toaster, kettle or waffle iron may only appear in a step if the user has said they own it.
+
+Do not pad the equipment list. If a step is "dice the onion", the equipment is a knife and a chopping board, not the stovetop that will be used two steps later. Tag each step with what that step actually needs.
+
+If the user's equipment is genuinely too limited for what they're craving, make the closest good thing they *can* make and say so in the summary. Never reach for an appliance they don't have.
+
 ## Time rules
 
 The user gives you a maximum total time. prepMinutes + cookMinutes must not exceed it, and the sum of your step minutes must be consistent with that total. Do not quietly assume ingredients are pre-chopped or that stock is already made — count that work.
+
+Mark each step as hands-off or not. A step is hands-off when the cook can genuinely walk away from it: simmering, baking, roasting, marinating, resting, chilling, proving. It is not hands-off if they must stir, watch, flip, or stand there — searing, stir-frying, whisking and sautéing are all hands-on even when brief.
+
+Be accurate about this rather than flattering. A recipe that is 40 minutes with only 8 minutes hands-on is genuinely weeknight-friendly, and saying so honestly is more useful than pretending everything is fast.
 
 ## Quality rules
 
@@ -66,6 +80,16 @@ export function buildUserTurn(req: CookRequest): string {
       ? `Willing to shop: yes — a short shopping list is acceptable, but keep it small.`
       : `Willing to shop: NO — every ingredient must be from the pantry list or a basic staple. This is a hard constraint.`,
   );
+
+  lines.push("");
+  if (req.cookware.length > 0) {
+    lines.push(`Appliances they own (hand tools are always assumed):`);
+    for (const item of req.cookware) lines.push(`- ${item}`);
+  } else {
+    lines.push(
+      `Appliances: NONE declared. Use hand tools only — no oven, stovetop, microwave or any other appliance.`,
+    );
+  }
 
   lines.push("");
   if (req.pantry.length > 0) {

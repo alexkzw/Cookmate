@@ -12,10 +12,19 @@ This is a grounding problem wearing an apron.
 
 | Grounded document QA | Cookable |
 | --- | --- |
-| Answer only from retrieved passages | Recipe only from pantry + stated constraints |
-| Hallucination = a fact not in the source | Hallucination = **an ingredient you don't have**, or 45 minutes when you said 20 |
-| Verify claims against the evidence | Verify every ingredient against the pantry, every minute against the budget |
+| Answer only from retrieved passages | Recipe only from pantry, cookware + stated constraints |
+| Hallucination = a fact not in the source | Hallucination = **an ingredient you don't have**, an air fryer you don't own, or 45 minutes when you said 20 |
+| Verify claims against the evidence | Verify every ingredient against the pantry, every appliance against your kitchen, every minute against the budget |
 | Cite the passage | Tag each ingredient `have it` / `staple` / `buy` |
+
+What gets checked, deterministically, on every recipe:
+
+- **Ingredients** — each one recomputed against your pantry; the model's own claim is discarded
+- **Cookware** — no air fryer, no air fryer recipes. Per-step, so "transfer to the air fryer" in step 4 is caught
+- **Time** — total against your budget, and step times against the stated total
+- **Active vs passive** — derived, not asked for: *"40 minutes, only 8 hands-on"*
+- **Dislikes and dietary needs** — absolute, garnishes included
+- **Servings**
 
 The verifier ([`apps/api/src/verify/constraints.ts`](apps/api/src/verify/constraints.ts)) never asks a model whether the recipe is valid. Asking the system that made a mistake to notice its own mistake shares the blind spot by construction. Ingredient membership and arithmetic are decidable, so they're plain TypeScript — fast, free, deterministic, and unit-tested in CI.
 
@@ -122,6 +131,14 @@ Caching is a prefix match, so the prompt is split deliberately:
 - `SYSTEM_PROMPT` is **frozen** — no dates, no user IDs, no request data — and carries the `cache_control` breakpoint. It's also long enough to clear Opus's 512-token minimum.
 - `buildUserTurn()` renders everything volatile *after* the breakpoint.
 
+Measured across two consecutive real calls:
+
+| | Cold | Warm |
+| --- | --- | --- |
+| Cache | `MISS` (wrote 2,518 tok) | `HIT` (read 2,518 tok) |
+| Cost | $0.0591 | **$0.0324 — 45% less** |
+| Latency | 20.3s | **13.8s** |
+
 A counter-intuitive detail worth knowing: **the minimum cacheable prefix is inversely related to price.** Haiku needs 4,096 tokens before caching engages; Opus needs 512. A short-prompt Haiku route silently never caches — full price, `cache_read_input_tokens: 0`, no error.
 
 Caching fails silently, so it's measured rather than assumed: every turn's cache status is logged and shown live in the debug strip (`?debug=1`).
@@ -170,11 +187,13 @@ The API verifies the Supabase JWT against the project's JWKS endpoint, so no sha
 
 ## Status
 
-**v1 (this):** streaming chat, structured recipe output, deterministic constraint verification, pantry + preferences, turn telemetry, Google OAuth, cost/cache instrumentation.
+**v1 (this):** streaming chat · structured recipe output · deterministic verification of ingredients, cookware, time, dislikes, dietary and servings · active vs passive time · pantry + preferences + cookware · turn telemetry · Google OAuth · cost/cache instrumentation.
 
-**v2:** pantry photo → ingredients (vision, Haiku tier) · taste memory learned from feedback · substitution suggestions.
+**v2:** repeat avoidance from logged history · use-it-first (expiry-aware pantry) · pantry photo → ingredients (vision, Haiku tier) · substitution suggestions.
 
-**v3:** MCP server exposing `get_pantry` / `suggest_recipe` / `add_to_shopping_list` · BYOK · shopping-list price estimates · eval harness over a fixed (pantry, constraints) set asserting the verifier passes.
+**v3:** weekly plan where three dinners must *collectively* fit one pantry (real constraint satisfaction — and where escalating to Opus 5 at high effort earns its cost) · MCP server · BYOK · eval harness over fixed (pantry, cookware, constraints) cases.
+
+Deliberately out of scope: real-time supermarket stock checking (no reliable API; substitutions plus a shopping list serve the same need better).
 
 ### Known limitations
 

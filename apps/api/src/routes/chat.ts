@@ -34,7 +34,12 @@ chatRoutes.post("/stream", requireAuth, async (c) => {
   // marking them optional) is deliberate: `.partial()` does NOT strip a field's
   // `.default([])`, so an "optional" pantry parses to `[]` rather than
   // `undefined` and silently defeats a `?? fromDatabase` fallback.
-  const InboundSchema = CookRequestSchema.omit({ pantry: true, dislikes: true, dietary: true });
+  const InboundSchema = CookRequestSchema.omit({
+    pantry: true,
+    dislikes: true,
+    dietary: true,
+    cookware: true,
+  });
   const parsed = InboundSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -53,6 +58,7 @@ chatRoutes.post("/stream", requireAuth, async (c) => {
     pantry: getPantry(user.id),
     dislikes: stored.dislikes,
     dietary: stored.dietary,
+    cookware: stored.cookware,
   };
 
   const turnId = openTurn(user.id, request);

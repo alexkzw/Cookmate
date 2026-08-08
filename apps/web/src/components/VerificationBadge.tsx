@@ -33,6 +33,9 @@ export function VerificationBadge({
         <CheckCircle2 className="h-4 w-4" />
         You can make this — {verification.pantryUsedCount} from your kitchen,{" "}
         {verification.totalMinutes} min
+        {verification.passiveMinutes > 0 && (
+          <span className="font-normal">({verification.activeMinutes} hands-on)</span>
+        )}
       </div>
     );
   }

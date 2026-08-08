@@ -74,11 +74,71 @@ export const IngredientSchema = z
   .strict();
 export type Ingredient = z.infer<typeof IngredientSchema>;
 
+/**
+ * EQUIPMENT — a closed vocabulary, on purpose.
+ *
+ * Because this is a Zod enum, structured outputs make it impossible for the
+ * model to emit equipment outside this list. That turns verification from
+ * fuzzy string matching (which is where the ingredient matcher gets its false
+ * positives) into exact set membership. Constrain the vocabulary at the schema
+ * and the checker becomes trivially correct.
+ */
+
+/** Appliances a kitchen may or may not have. The user ticks these once. */
+export const APPLIANCES = [
+  "oven",
+  "stovetop",
+  "microwave",
+  "air fryer",
+  "grill",
+  "slow cooker",
+  "pressure cooker",
+  "rice cooker",
+  "blender",
+  "food processor",
+  "stand mixer",
+  "toaster",
+  "kettle",
+  "waffle iron",
+] as const;
+
+/** Hand tools assumed present in any kitchen — never a reason to reject a recipe. */
+export const UNIVERSAL_TOOLS = [
+  "knife",
+  "chopping board",
+  "mixing bowl",
+  "saucepan",
+  "frying pan",
+  "baking tray",
+  "colander",
+  "grater",
+  "whisk",
+  "tongs",
+  "measuring cup",
+] as const;
+
+export const EQUIPMENT = [...APPLIANCES, ...UNIVERSAL_TOOLS] as const;
+export const EquipmentSchema = z.enum(EQUIPMENT);
+export type Equipment = z.infer<typeof EquipmentSchema>;
+export type Appliance = (typeof APPLIANCES)[number];
+
 export const StepSchema = z
   .object({
     number: z.number().describe("1-indexed step order"),
     instruction: z.string().describe("One clear action. No step numbers in the text itself."),
     minutes: z.number().describe("Wall-clock minutes this step takes"),
+    /**
+     * Hands-off means the cook can walk away: simmering, baking, resting,
+     * marinating. The verifier sums these separately so we can honestly say
+     * "40 minutes, but only 8 of them hands-on" — which is often the
+     * difference between cooking on a weeknight and ordering takeaway.
+     */
+    handsOff: z
+      .boolean()
+      .describe("True if the cook can walk away during this step (simmer, bake, rest, marinate)"),
+    equipment: z
+      .array(EquipmentSchema)
+      .describe("Equipment this step requires. Omit anything not genuinely needed."),
     /** Lets the UI show which pantry items each step consumes. */
     uses: z.array(z.string()).describe("Ingredient names used in this step"),
   })

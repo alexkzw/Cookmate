@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { EquipmentSchema } from "./recipe.js";
 
 /**
  * What the user asked for. This is the "evidence" the recipe must be grounded
@@ -21,6 +22,12 @@ export const CookRequestSchema = z
     pantry: z.array(z.string().min(1).max(80)).max(200).default([]),
     dislikes: z.array(z.string().min(1).max(80)).max(100).default([]),
     dietary: z.array(z.string().min(1).max(80)).max(20).default([]),
+    /**
+     * Appliances the user actually owns. Asked once at onboarding, then
+     * treated exactly like the pantry: evidence the recipe is grounded
+     * against. No air fryer, no air fryer recipes.
+     */
+    cookware: z.array(EquipmentSchema).max(40).default([]),
   })
   .strict();
 export type CookRequest = z.infer<typeof CookRequestSchema>;
@@ -34,6 +41,7 @@ export const ViolationSchema = z
   .object({
     kind: z.enum([
       "missing_ingredient", // needs shopping when willShop === false
+      "missing_equipment", // a step needs an appliance the user doesn't own
       "over_time", // prep + cook exceeds maxMinutes
       "step_time_mismatch", // step minutes don't sum to the stated total
       "disliked_ingredient", // contains something on the dislike list
@@ -55,6 +63,15 @@ export const VerificationSchema = z
     shoppingList: z.array(z.string()),
     pantryUsedCount: z.number(),
     totalMinutes: z.number(),
+    /**
+     * Derived from the steps rather than asked of the model — arithmetic we
+     * can do exactly is arithmetic we should never delegate.
+     * "40 minutes, 8 of them hands-on" is the number people actually decide on.
+     */
+    activeMinutes: z.number(),
+    passiveMinutes: z.number(),
+    /** Appliances used that the user does own — shown as reassurance. */
+    equipmentUsed: z.array(z.string()),
   })
   .strict();
 export type Verification = z.infer<typeof VerificationSchema>;

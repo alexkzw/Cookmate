@@ -8,8 +8,11 @@ import {
 } from "@cookable/shared";
 import { authHeaders } from "../lib/api";
 
-/** The client picks these; pantry/dislikes/dietary are read server-side. */
-export type CookRequestInput = Omit<CookRequest, "pantry" | "dislikes" | "dietary">;
+/** The client picks these; pantry/prefs/cookware are read server-side. */
+export type CookRequestInput = Omit<
+  CookRequest,
+  "pantry" | "dislikes" | "dietary" | "cookware"
+>;
 
 /**
  * Consumes the SSE stream from POST /api/chat/stream.

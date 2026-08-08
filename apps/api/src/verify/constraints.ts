@@ -1,4 +1,10 @@
-import type { CookRequest, Recipe, Verification, Violation } from "@cookable/shared";
+import {
+  UNIVERSAL_TOOLS,
+  type CookRequest,
+  type Recipe,
+  type Verification,
+  type Violation,
+} from "@cookable/shared";
 
 /**
  * THE CONSTRAINT VERIFIER — the core of the product.
@@ -152,6 +158,53 @@ export function verifyRecipe(recipe: Recipe, request: CookRequest): Verification
     }
   }
 
+  /**
+   * EQUIPMENT CHECK.
+   *
+   * Note how much simpler this is than the ingredient check above: because
+   * `equipment` is a Zod enum in the schema, the model physically cannot emit
+   * a name outside the known vocabulary, so this is exact set membership with
+   * no normalisation and no false-positive rules. Constraining the vocabulary
+   * at the schema is what buys that.
+   */
+  const alwaysAvailable = new Set<string>(UNIVERSAL_TOOLS);
+  const owned = new Set<string>(request.cookware);
+  const equipmentUsed = new Set<string>();
+  const alreadyFlagged = new Set<string>();
+
+  for (const step of recipe.steps) {
+    for (const item of step.equipment) {
+      if (alwaysAvailable.has(item)) continue;
+      if (owned.has(item)) {
+        equipmentUsed.add(item);
+        continue;
+      }
+      // One violation per missing appliance, not one per step that uses it.
+      if (alreadyFlagged.has(item)) continue;
+      alreadyFlagged.add(item);
+      violations.push({
+        kind: "missing_equipment",
+        detail: `Step ${step.number} needs a ${item}, which isn't in your kitchen.`,
+        subject: item,
+      });
+    }
+  }
+
+  /**
+   * ACTIVE vs PASSIVE TIME.
+   *
+   * Computed here from the steps rather than requested from the model: it's
+   * exact arithmetic, so asking for it would only create something else to
+   * verify. "40 minutes, 8 hands-on" is often the number that decides whether
+   * someone cooks at all.
+   */
+  let activeMinutes = 0;
+  let passiveMinutes = 0;
+  for (const step of recipe.steps) {
+    if (step.handsOff) passiveMinutes += step.minutes;
+    else activeMinutes += step.minutes;
+  }
+
   const totalMinutes = recipe.prepMinutes + recipe.cookMinutes;
   if (totalMinutes > request.maxMinutes) {
     violations.push({
@@ -186,6 +239,9 @@ export function verifyRecipe(recipe: Recipe, request: CookRequest): Verification
     shoppingList: [...new Set(shoppingList)],
     pantryUsedCount,
     totalMinutes,
+    activeMinutes,
+    passiveMinutes,
+    equipmentUsed: [...equipmentUsed],
   };
 }
 

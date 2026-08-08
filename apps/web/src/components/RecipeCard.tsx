@@ -50,12 +50,20 @@ export function RecipeCard({
         <p className="mt-1 text-slate-600">{recipe.summary}</p>
 
         <div className="mt-4 flex flex-wrap items-center gap-4 text-sm text-slate-600">
+          {/* Active vs passive is the number people actually decide on: a
+              40-minute bake with 8 minutes of work is a weeknight meal. */}
           <span className="inline-flex items-center gap-1.5">
             <Clock className="h-4 w-4 text-slate-400" />
             {recipe.prepMinutes + recipe.cookMinutes} min
-            <span className="text-slate-400">
-              ({recipe.prepMinutes} prep · {recipe.cookMinutes} cook)
-            </span>
+            {verification && verification.passiveMinutes > 0 ? (
+              <span className="font-medium text-brand-700">
+                · only {verification.activeMinutes} hands-on
+              </span>
+            ) : (
+              <span className="text-slate-400">
+                ({recipe.prepMinutes} prep · {recipe.cookMinutes} cook)
+              </span>
+            )}
           </span>
           <span className="inline-flex items-center gap-1.5">
             <Users className="h-4 w-4 text-slate-400" />
@@ -121,12 +129,27 @@ export function RecipeCard({
           <ol className="space-y-4">
             {recipe.steps.map((step) => (
               <li key={step.number} className="flex gap-3">
-                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-100 text-sm font-semibold text-brand-800">
+                <span
+                  className={clsx(
+                    "flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm font-semibold",
+                    step.handsOff
+                      ? "bg-slate-100 text-slate-500"
+                      : "bg-brand-100 text-brand-800",
+                  )}
+                >
                   {step.number}
                 </span>
                 <div className="pt-0.5">
                   <p className="text-slate-800">{step.instruction}</p>
-                  <p className="mt-0.5 text-xs text-slate-400">{step.minutes} min</p>
+                  <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-slate-400">
+                    <span>{step.minutes} min</span>
+                    {step.handsOff && (
+                      <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">
+                        hands off
+                      </span>
+                    )}
+                    {step.equipment.length > 0 && <span>· {step.equipment.join(", ")}</span>}
+                  </p>
                 </div>
               </li>
             ))}

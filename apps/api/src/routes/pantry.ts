@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import { EquipmentSchema } from "@cookable/shared";
 import { requireAuth } from "../auth.js";
 import { getPantry, setPantry, getPreferences, setPreferences } from "../db/index.js";
 
@@ -15,6 +16,9 @@ const UpdateSchema = z
     pantry: z.array(z.string().min(1).max(80)).max(200).optional(),
     dislikes: z.array(z.string().min(1).max(80)).max(100).optional(),
     dietary: z.array(z.string().min(1).max(80)).max(20).optional(),
+    // Enum-validated, so an unknown appliance is a 400 rather than a value
+    // that silently never matches anything in the verifier.
+    cookware: z.array(EquipmentSchema).max(40).optional(),
   })
   .strict();
 
@@ -26,11 +30,12 @@ pantryRoutes.put("/", requireAuth, async (c) => {
   }
 
   if (parsed.data.pantry) setPantry(user.id, parsed.data.pantry);
-  if (parsed.data.dislikes || parsed.data.dietary) {
+  if (parsed.data.dislikes || parsed.data.dietary || parsed.data.cookware) {
     const current = getPreferences(user.id);
     setPreferences(user.id, {
       dislikes: parsed.data.dislikes ?? current.dislikes,
       dietary: parsed.data.dietary ?? current.dietary,
+      cookware: parsed.data.cookware ?? current.cookware,
     });
   }
 
