@@ -1,0 +1,1 @@
+{"root":["./src/hooks/userecipestream.ts","./src/lib/api.ts","./src/lib/supabase.ts","./src/app.tsx","./src/main.tsx","./src/components/chat.tsx","./src/components/cookform.tsx","./src/components/landing.tsx","./src/components/pantrypanel.tsx","./src/components/recipecard.tsx","./src/components/usagebar.tsx","./src/components/verificationbadge.tsx"],"version":"5.9.3"}
