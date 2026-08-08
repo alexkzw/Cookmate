@@ -8,6 +8,9 @@ import {
 } from "@cookable/shared";
 import { authHeaders } from "../lib/api";
 
+/** The client picks these; pantry/dislikes/dietary are read server-side. */
+export type CookRequestInput = Omit<CookRequest, "pantry" | "dislikes" | "dietary">;
+
 /**
  * Consumes the SSE stream from POST /api/chat/stream.
  *
@@ -77,7 +80,7 @@ export function useRecipeStream() {
     setState(EMPTY);
   }, []);
 
-  const start = useCallback(async (request: CookRequest) => {
+  const start = useCallback(async (request: CookRequestInput) => {
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;

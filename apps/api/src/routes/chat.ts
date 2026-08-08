@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { CookRequestSchema, type StreamEvent } from "@cookable/shared";
+import { CookRequestSchema, type CookRequest, type StreamEvent } from "@cookable/shared";
 import { requireAuth } from "../auth.js";
 import { getPantry, getPreferences } from "../db/index.js";
 import { streamRecipe, RecipeGenerationError } from "../llm/generate.js";
@@ -28,9 +28,13 @@ chatRoutes.post("/stream", requireAuth, async (c) => {
 
   const body = await c.req.json().catch(() => null);
 
-  // Pantry and preferences are stored server-side, so the client may omit them.
-  // Anything it does send wins for this one turn without being persisted.
-  const InboundSchema = CookRequestSchema.partial({ pantry: true, dislikes: true, dietary: true });
+  // Pantry, dislikes and dietary needs are server-owned state — they are the
+  // evidence the recipe gets grounded against, so the client cannot supply or
+  // override them. Omitting them from the inbound schema entirely (rather than
+  // marking them optional) is deliberate: `.partial()` does NOT strip a field's
+  // `.default([])`, so an "optional" pantry parses to `[]` rather than
+  // `undefined` and silently defeats a `?? fromDatabase` fallback.
+  const InboundSchema = CookRequestSchema.omit({ pantry: true, dislikes: true, dietary: true });
   const parsed = InboundSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -44,11 +48,11 @@ chatRoutes.post("/stream", requireAuth, async (c) => {
   }
 
   const stored = getPreferences(user.id);
-  const request = {
+  const request: CookRequest = {
     ...parsed.data,
-    pantry: parsed.data.pantry ?? getPantry(user.id),
-    dislikes: parsed.data.dislikes ?? stored.dislikes,
-    dietary: parsed.data.dietary ?? stored.dietary,
+    pantry: getPantry(user.id),
+    dislikes: stored.dislikes,
+    dietary: stored.dietary,
   };
 
   const turnId = openTurn(user.id, request);

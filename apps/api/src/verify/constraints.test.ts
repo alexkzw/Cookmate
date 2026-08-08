@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { CookRequest, Recipe } from "@cookable/shared";
+import { CookRequestSchema, type CookRequest, type Recipe } from "@cookable/shared";
 import { verifyRecipe, __testables } from "./constraints.js";
 
 /**
@@ -41,6 +41,39 @@ function recipe(overrides: Partial<Recipe> = {}): Recipe {
     ...overrides,
   };
 }
+
+describe("inbound request schema", () => {
+  /**
+   * Regression: the chat route used to accept an "optional" pantry via
+   * `.partial()`. Zod's `.partial()` does NOT strip a field's `.default([])`,
+   * so the field parsed to `[]` instead of `undefined` and silently defeated
+   * the `?? readFromDatabase()` fallback — every recipe was generated against
+   * an empty pantry. The route now omits these fields entirely.
+   */
+  it("rejects a client that tries to supply its own pantry", () => {
+    // The base schema is .strict(), so omitting the field doesn't just ignore
+    // a smuggled pantry — it fails loudly, which is the behaviour we want.
+    const Inbound = CookRequestSchema.omit({ pantry: true, dislikes: true, dietary: true });
+    const result = Inbound.safeParse({
+      craving: "anything",
+      servings: 2,
+      maxMinutes: 30,
+      effort: "minimal",
+      willShop: false,
+      pantry: ["smuggled in from the client"],
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.code).toBe("unrecognized_keys");
+  });
+
+  it("still applies defaults for the fields the client does own", () => {
+    const Inbound = CookRequestSchema.omit({ pantry: true, dislikes: true, dietary: true });
+    const parsed = Inbound.parse({ craving: "anything" });
+    expect(parsed.servings).toBe(2);
+    expect(parsed.maxMinutes).toBe(30);
+    expect(parsed.willShop).toBe(true);
+  });
+});
 
 describe("normalisation", () => {
   const { normalise } = __testables;

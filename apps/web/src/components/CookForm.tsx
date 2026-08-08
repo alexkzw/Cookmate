@@ -3,6 +3,9 @@ import { Sparkles, Loader2 } from "lucide-react";
 import clsx from "clsx";
 import { EFFORT_LEVELS, type CookRequest } from "@cookable/shared";
 
+/** What the client is allowed to choose. The rest is server-owned state. */
+export type CookFormValues = Omit<CookRequest, "pantry" | "dislikes" | "dietary">;
+
 const TIME_PRESETS = [15, 30, 45, 90] as const;
 
 /**
@@ -17,7 +20,7 @@ export function CookForm({
   busy,
   compact = false,
 }: {
-  onSubmit: (req: CookRequest) => void;
+  onSubmit: (req: CookFormValues) => void;
   busy: boolean;
   compact?: boolean;
 }) {
@@ -30,17 +33,10 @@ export function CookForm({
   function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!craving.trim() || busy) return;
-    onSubmit({
-      craving: craving.trim(),
-      servings,
-      maxMinutes,
-      effort,
-      willShop,
-      // Pantry and preferences come from the server's stored copy.
-      pantry: [],
-      dislikes: [],
-      dietary: [],
-    } as CookRequest);
+    // Pantry, dislikes and dietary are deliberately NOT sent: the server owns
+    // them and reads its stored copy. Sending empty arrays here would override
+    // the real pantry with nothing.
+    onSubmit({ craving: craving.trim(), servings, maxMinutes, effort, willShop });
   }
 
   return (

@@ -1,6 +1,5 @@
 import { AlertCircle, Sparkles } from "lucide-react";
-import type { CookRequest } from "@cookable/shared";
-import { useRecipeStream } from "../hooks/useRecipeStream";
+import { useRecipeStream, type CookRequestInput } from "../hooks/useRecipeStream";
 import { CookForm } from "./CookForm";
 import { RecipeCard } from "./RecipeCard";
 import { VerificationBadge } from "./VerificationBadge";
@@ -12,7 +11,7 @@ export function Chat({ showUsage }: { showUsage: boolean }) {
   const busy = state.phase === "generating" || state.phase === "verifying";
   const hasResult = state.recipe !== null;
 
-  function onSubmit(req: CookRequest) {
+  function onSubmit(req: CookRequestInput) {
     void start(req);
   }
 
