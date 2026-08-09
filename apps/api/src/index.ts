@@ -43,6 +43,6 @@ if (config.DEV_ALLOW_ANONYMOUS) {
 }
 
 serve({ fetch: app.fetch, port: config.PORT }, (info) => {
-  console.log(`cookable api → http://localhost:${info.port}`);
+  console.log(`cookmate api → http://localhost:${info.port}`);
   console.log(`  model: ${config.RECIPE_MODEL} (effort: ${config.RECIPE_EFFORT})`);
 });

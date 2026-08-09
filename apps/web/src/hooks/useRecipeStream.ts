@@ -5,7 +5,7 @@ import {
   type Recipe,
   type StreamEvent,
   type Verification,
-} from "@cookable/shared";
+} from "@cookmate/shared";
 import { authHeaders } from "../lib/api";
 
 /** The client picks these; pantry/prefs/cookware are read server-side. */

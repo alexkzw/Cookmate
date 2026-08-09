@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Refrigerator, Save, Loader2, Cookie } from "lucide-react";
 import clsx from "clsx";
-import { APPLIANCES, type Equipment } from "@cookable/shared";
+import { APPLIANCES, type Equipment } from "@cookmate/shared";
 import { fetchPantry, savePantry, type PantryState } from "../lib/api";
 
 /**

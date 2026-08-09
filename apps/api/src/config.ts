@@ -14,7 +14,7 @@ const EnvSchema = z.object({
   SUPABASE_JWKS_URL: z.string().url().optional(),
 
   PORT: z.coerce.number().int().default(8787),
-  DATABASE_PATH: z.string().default("./data/cookable.db"),
+  DATABASE_PATH: z.string().default("./data/cookmate.db"),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   DEV_ALLOW_ANONYMOUS: z
     .string()

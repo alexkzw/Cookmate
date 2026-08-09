@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { CookRequestSchema, type CookRequest, type StreamEvent } from "@cookable/shared";
+import { CookRequestSchema, type CookRequest, type StreamEvent } from "@cookmate/shared";
 import { requireAuth } from "../auth.js";
 import { getPantry, getPreferences } from "../db/index.js";
 import { streamRecipe, RecipeGenerationError } from "../llm/generate.js";

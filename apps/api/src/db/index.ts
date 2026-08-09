@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import type { Equipment } from "@cookable/shared";
+import type { Equipment } from "@cookmate/shared";
 import { config } from "../config.js";
 
 /**

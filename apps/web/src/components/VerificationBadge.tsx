@@ -1,5 +1,5 @@
 import { CheckCircle2, AlertTriangle, Loader2 } from "lucide-react";
-import type { Verification } from "@cookable/shared";
+import type { Verification } from "@cookmate/shared";
 import type { Phase } from "../hooks/useRecipeStream";
 
 /**

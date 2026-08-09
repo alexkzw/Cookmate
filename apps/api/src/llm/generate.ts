@@ -1,6 +1,6 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
-import { RecipeSchema, type CookRequest, type Recipe } from "@cookable/shared";
+import { RecipeSchema, type CookRequest, type Recipe } from "@cookmate/shared";
 import { anthropic } from "./client.js";
 import { config } from "../config.js";
 import { SYSTEM_PROMPT, buildUserTurn } from "./prompts.js";

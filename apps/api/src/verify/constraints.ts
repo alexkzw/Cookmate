@@ -4,7 +4,7 @@ import {
   type Recipe,
   type Verification,
   type Violation,
-} from "@cookable/shared";
+} from "@cookmate/shared";
 
 /**
  * THE CONSTRAINT VERIFIER — the core of the product.

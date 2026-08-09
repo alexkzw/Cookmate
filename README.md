@@ -1,8 +1,8 @@
-# Cookable
+# Cookmate
 
 Recipes you can actually make tonight — with the ingredients you already have, in the time you actually have.
 
-Most AI recipe apps will cheerfully suggest a dish that needs four things you don't own and takes twice as long as you said. Cookable's differentiator is that **every recipe is verified against your constraints before you see it**, by deterministic code rather than by asking the model whether it followed the rules.
+Most AI recipe apps will cheerfully suggest a dish that needs four things you don't own and takes twice as long as you said. Cookmate's differentiator is that **every recipe is verified against your constraints before you see it**, by deterministic code rather than by asking the model whether it followed the rules.
 
 ---
 
@@ -10,7 +10,7 @@ Most AI recipe apps will cheerfully suggest a dish that needs four things you do
 
 This is a grounding problem wearing an apron.
 
-| Grounded document QA | Cookable |
+| Grounded document QA | Cookmate |
 | --- | --- |
 | Answer only from retrieved passages | Recipe only from pantry, cookware + stated constraints |
 | Hallucination = a fact not in the source | Hallucination = **an ingredient you don't have**, an air fryer you don't own, or 45 minutes when you said 20 |
@@ -166,7 +166,10 @@ cp apps/web/.env.example apps/web/.env  # optional: Supabase for Google OAuth
 pnpm dev        # api :8787, web :5173
 ```
 
-With `DEV_ALLOW_ANONYMOUS=1` (the default in `.env.example`) the API bypasses auth and the web app runs in local mode — so the whole UI is buildable before you set up an OAuth consent screen.
+Put the key **only** in `.env` — `.env.example` is a committed template, so a key
+pasted there is one `git add` away from being published.
+
+With `DEV_ALLOW_ANONYMOUS=1` (the default in `.env.example`) the API bypasses auth and the web app runs in local mode — so the whole UI is buildable before you set up an OAuth consent screen. The web `.env` is genuinely optional: its Supabase values ship as `<project-ref>` placeholders, and the client treats unfilled placeholders as unconfigured, so copying the file verbatim still lands you in local mode rather than on a sign-in screen you can't get past.
 
 ```bash
 pnpm typecheck   # all three packages

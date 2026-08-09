@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { EquipmentSchema } from "@cookable/shared";
+import { EquipmentSchema } from "@cookmate/shared";
 import { requireAuth } from "../auth.js";
 import { getPantry, setPantry, getPreferences, setPreferences } from "../db/index.js";
 

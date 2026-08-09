@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { CookRequestSchema, type CookRequest, type Recipe } from "@cookable/shared";
+import { CookRequestSchema, type CookRequest, type Recipe } from "@cookmate/shared";
 import { verifyRecipe, __testables } from "./constraints.js";
 
 /**

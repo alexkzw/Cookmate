@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Sparkles, Loader2 } from "lucide-react";
 import clsx from "clsx";
-import { EFFORT_LEVELS, type CookRequest } from "@cookable/shared";
+import { EFFORT_LEVELS, type CookRequest } from "@cookmate/shared";
 
 /** What the client is allowed to choose. The rest is server-owned state. */
 export type CookFormValues = Omit<

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { CookRequest, Recipe, Verification } from "@cookable/shared";
+import type { CookRequest, Recipe, Verification } from "@cookmate/shared";
 import { db } from "../db/index.js";
 import type { CacheStatus } from "../llm/models.js";
 

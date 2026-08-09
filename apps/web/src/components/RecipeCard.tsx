@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Clock, Users, ChefHat, ShoppingCart, ThumbsUp, ThumbsDown, Check } from "lucide-react";
 import clsx from "clsx";
-import type { Recipe, Verification } from "@cookable/shared";
+import type { Recipe, Verification } from "@cookmate/shared";
 import { sendFeedback } from "../lib/api";
 
 const SOURCE_STYLES: Record<string, string> = {

@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import type { Stats } from "@cookable/shared";
+import type { Stats } from "@cookmate/shared";
 import { db } from "../db/index.js";
 
 export const statsRoutes = new Hono();

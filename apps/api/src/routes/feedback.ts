@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { FeedbackSchema } from "@cookable/shared";
+import { FeedbackSchema } from "@cookmate/shared";
 import { requireAuth } from "../auth.js";
 import { recordFeedback } from "../telemetry/turns.js";
 

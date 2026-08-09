@@ -20,7 +20,7 @@ importers:
       '@anthropic-ai/sdk':
         specifier: ^0.116.0
         version: 0.116.0(zod@4.4.3)
-      '@cookable/shared':
+      '@cookmate/shared':
         specifier: workspace:*
         version: link:../../packages/shared
       '@hono/node-server':
@@ -57,7 +57,7 @@ importers:
 
   apps/web:
     dependencies:
-      '@cookable/shared':
+      '@cookmate/shared':
         specifier: workspace:*
         version: link:../../packages/shared
       '@supabase/supabase-js':

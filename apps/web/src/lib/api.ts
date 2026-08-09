@@ -1,4 +1,4 @@
-import type { Equipment, Feedback, Stats } from "@cookable/shared";
+import type { Equipment, Feedback, Stats } from "@cookmate/shared";
 import { getAccessToken } from "./supabase";
 
 async function authHeaders(): Promise<Record<string, string>> {

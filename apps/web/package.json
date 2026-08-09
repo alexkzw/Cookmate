@@ -1,5 +1,5 @@
 {
-  "name": "@cookable/web",
+  "name": "@cookmate/web",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@cookable/shared": "workspace:*",
+    "@cookmate/shared": "workspace:*",
     "@supabase/supabase-js": "^2.47.10",
     "clsx": "^2.1.1",
     "lucide-react": "^0.469.0",

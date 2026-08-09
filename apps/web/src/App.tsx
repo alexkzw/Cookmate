@@ -32,7 +32,7 @@ export default function App() {
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-3.5">
           <div className="flex items-baseline gap-1.5">
-            <span className="text-xl font-bold tracking-tight text-brand-700">cookable</span>
+            <span className="text-xl font-bold tracking-tight text-brand-700">cookmate</span>
             {!authEnabled && (
               <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium uppercase text-amber-800">
                 local

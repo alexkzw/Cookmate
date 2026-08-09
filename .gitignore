@@ -4,8 +4,8 @@ dist/
 .DS_Store
 .env
 .env.local
-data/*.db
-data/*.db-shm
-data/*.db-wal
+**/data/*.db
+**/data/*.db-shm
+**/data/*.db-wal
 .vite/
 coverage/

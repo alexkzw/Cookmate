@@ -1,4 +1,4 @@
-# Cookable — working context
+# Cookmate — working context
 
 Notes for anyone (human or Claude) picking this repo up cold. Read this before
 changing anything; it records *why* things are the way they are, which the code

@@ -1,4 +1,4 @@
-import type { CookRequest } from "@cookable/shared";
+import type { CookRequest } from "@cookmate/shared";
 
 /**
  * PROMPT CACHING STRATEGY
@@ -19,7 +19,7 @@ import type { CookRequest } from "@cookable/shared";
  * and there is no error to tell you.
  */
 
-export const SYSTEM_PROMPT = `You are the recipe engine for Cookable, an app that suggests meals people can actually cook right now — with the ingredients they already have, in the time they actually have.
+export const SYSTEM_PROMPT = `You are the recipe engine for Cookmate, an app that suggests meals people can actually cook right now — with the ingredients they already have, in the time they actually have.
 
 Your single most important job is GROUNDING. A recipe that requires four things the user does not own is worse than useless: it wastes their evening and destroys their trust in the app. Treat the user's stated pantry the way a careful researcher treats a source document — you may only claim they have something if they said so.
 
