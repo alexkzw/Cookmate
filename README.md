@@ -114,13 +114,15 @@ Configured via `RECIPE_MODEL`, so switching is an env var and a measurement, not
 
 ### Cost, honestly
 
-A typical turn is roughly 2–4K input / ~1.5K output:
+A measured turn is 3,627 input / ~2,300 output tokens. Opus is measured; the
+other two are that same token profile at list rates, warm cache where the prefix
+qualifies:
 
-| Model | ≈ per turn | 200 turns/mo (one real user) |
-| --- | --- | --- |
-| Haiku 4.5 | $0.008 | ~$1.60 |
-| Sonnet 5 | $0.023 | ~$4.60 |
-| Opus 5 | $0.038 | ~$7.60 |
+| Model | ≈ per turn (warm) | 200 turns/mo (one real user) | Caching |
+| --- | --- | --- | --- |
+| Haiku 4.5 | $0.015 | ~$3.00 | **never engages** — 3,472 < 4,096 minimum |
+| Sonnet 5 | $0.036 | ~$7.20 | works (1,024 minimum) |
+| Opus 5 | $0.059 | ~$11.80 | works (512 minimum) — **measured** |
 
 **At one user, model cost is a rounding error** — the real costs are latency and your time, so v1 optimises for quality. It flips around 50K turns/month, where caching and a Haiku routing tier start paying for their complexity. Knowing when *not* to optimise matters as much as knowing how.
 
@@ -131,15 +133,39 @@ Caching is a prefix match, so the prompt is split deliberately:
 - `SYSTEM_PROMPT` is **frozen** — no dates, no user IDs, no request data — and carries the `cache_control` breakpoint. It's also long enough to clear Opus's 512-token minimum.
 - `buildUserTurn()` renders everything volatile *after* the breakpoint.
 
-Measured across two consecutive real calls:
+Measured on Opus 5 by running the same request under all three cache states. The
+prefix is 3,472 tokens (system prompt + the compiled `RecipeSchema`); the user
+turn is 155:
 
-| | Cold | Warm |
-| --- | --- | --- |
-| Cache | `MISS` (wrote 2,518 tok) | `HIT` (read 2,518 tok) |
-| Cost | $0.0591 | **$0.0324 — 45% less** |
-| Latency | 20.3s | **13.8s** |
+| | `NONE` (no `cache_control`) | `MISS` (cold) | `HIT` (warm) |
+| --- | --- | --- | --- |
+| `input_tokens` | 3,627 | 155 | 155 |
+| `cache_write_tokens` | 0 | 3,472 | 0 |
+| `cache_read_tokens` | 0 | 0 | 3,472 |
+| **Input-side cost** | $0.01814 | **$0.02248 — 24% worse** | **$0.00251 — 86% less** |
+| Total turn cost | $0.0723 | $0.0778 | $0.0587 |
 
-A counter-intuitive detail worth knowing: **the minimum cacheable prefix is inversely related to price.** Haiku needs 4,096 tokens before caching engages; Opus needs 512. A short-prompt Haiku route silently never caches — full price, `cache_read_input_tokens: 0`, no error.
+**Caching reclassifies tokens; it does not reduce them.** All three states send
+the model exactly 3,627 input tokens — `input_tokens + cache_read + cache_write`
+is conserved. What changes is the rate each bucket bills at: reads at 10% of
+input, writes at 125%.
+
+That write premium is the part people miss. **A cache miss costs 24% more than
+never caching at all**, so caching is a bet on locality: below a **~22% hit
+rate** it loses money on this prompt shape.
+
+Two caveats on the totals column, both learned the hard way:
+
+- **Output tokens dominate and they're noisy.** Output ran 2,168–2,622 across
+  runs (a 21% spread) and bills at $25/MTok, so it is ~96% of the cost of a
+  warm turn. Compare the input-side column, not the total — an earlier version
+  of this table reported a 45% saving that was mostly output-length variance
+  attributed to caching.
+- **No latency win was reproducible.** 28.1s cold vs 28.5s warm. Prefilling
+  3,472 cached tokens is small next to decoding ~2,300, so any gain sits inside
+  run-to-run noise. Caching is a cost lever here, not a speed one.
+
+A counter-intuitive detail worth knowing: **the minimum cacheable prefix is inversely related to price.** Haiku needs 4,096 tokens before caching engages; Opus needs 512. A short-prompt Haiku route silently never caches — full price, `cache_read_input_tokens: 0`, no error. At 3,472 tokens this prefix clears Opus and Sonnet comfortably and **would silently no-op on Haiku.**
 
 Caching fails silently, so it's measured rather than assumed: every turn's cache status is logged and shown live in the debug strip (`?debug=1`).
 
