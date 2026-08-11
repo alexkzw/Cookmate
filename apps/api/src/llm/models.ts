@@ -108,6 +108,22 @@ export function classifyCache(usage: TokenUsage): CacheStatus {
   return "NONE";
 }
 
+/**
+ * Everything known about one billed call: tokens, money, cache behaviour and
+ * timing.
+ *
+ * Carried on the failure path as well as the success path. A refusal, a
+ * truncation or an unparseable response is still billed, and a failure whose
+ * cost you cannot see is precisely the expensive kind — you learn about it from
+ * the invoice rather than the dashboard.
+ */
+export interface CallUsage extends TokenUsage {
+  costUsd: number;
+  cacheStatus: CacheStatus;
+  model: string;
+  latencyMs: number;
+}
+
 export function describeModel(modelId: string): ModelSpec | undefined {
   return MODELS[modelId];
 }
