@@ -13,9 +13,11 @@ pantryRoutes.get("/", requireAuth, (c) => {
 
 const UpdateSchema = z
   .object({
-    pantry: z.array(z.string().min(1).max(80)).max(200).optional(),
-    dislikes: z.array(z.string().min(1).max(80)).max(100).optional(),
-    dietary: z.array(z.string().min(1).max(80)).max(20).optional(),
+    // Bounds mirror CookRequestSchema in @cookmate/shared — keep them in step,
+    // or a value the client can save becomes one the generator rejects.
+    pantry: z.array(z.string().min(1).max(120)).max(200).optional(),
+    dislikes: z.array(z.string().min(1).max(120)).max(100).optional(),
+    dietary: z.array(z.string().min(1).max(120)).max(20).optional(),
     // Enum-validated, so an unknown appliance is a 400 rather than a value
     // that silently never matches anything in the verifier.
     cookware: z.array(EquipmentSchema).max(40).optional(),
