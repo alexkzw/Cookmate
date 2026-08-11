@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { Refrigerator, Save, Loader2, Cookie } from "lucide-react";
+import { Refrigerator, Save, Loader2, Cookie, AlertCircle } from "lucide-react";
 import clsx from "clsx";
 import { APPLIANCES, type Equipment } from "@cookmate/shared";
-import { fetchPantry, savePantry, type PantryState } from "../lib/api";
+import { fetchPantry, savePantry } from "../lib/api";
 
 /**
  * The pantry and cookware are the evidence recipes get grounded against, so
@@ -12,54 +12,98 @@ import { fetchPantry, savePantry, type PantryState } from "../lib/api";
  * Cookware is a fixed checklist rather than free text on purpose: it shares a
  * closed vocabulary with the recipe schema's equipment enum, so verification
  * is exact set membership instead of fuzzy string matching.
+ *
+ * TEXT IS HELD RAW AND PARSED ONCE, ON SAVE.
+ *
+ * The previous version parsed on every keystroke and rendered the result back
+ * into the textarea. A trailing space was therefore trimmed away before the
+ * next character could arrive — you could not type "soy sauce" — and Enter was
+ * eaten the same way by the empty-line filter, so the box could only ever hold
+ * one item. Intermediate typing states are not valid final states, so
+ * normalising a controlled input on every change is always wrong. Keep the raw
+ * string; parse at the boundary where it actually matters.
  */
+
+/** One item per line. Commas too, so a pasted "a, b, c" list also works. */
+function toItems(raw: string): string[] {
+  return raw
+    .split(/[\n,]/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+const toText = (items: string[]) => items.join("\n");
+
+type TextField = "pantry" | "dislikes" | "dietary";
+
 export function PantryPanel() {
-  const [state, setState] = useState<PantryState>({
-    pantry: [],
-    dislikes: [],
-    dietary: [],
-    cookware: [],
+  const [text, setText] = useState<Record<TextField, string>>({
+    pantry: "",
+    dislikes: "",
+    dietary: "",
   });
+  const [cookware, setCookware] = useState<Equipment[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchPantry()
-      .then(setState)
-      .catch(() => void 0)
+      .then((stored) => {
+        setText({
+          pantry: toText(stored.pantry),
+          dislikes: toText(stored.dislikes),
+          dietary: toText(stored.dietary),
+        });
+        setCookware(stored.cookware);
+      })
+      .catch(() => setError("Couldn't load your kitchen — is the API running?"))
       .finally(() => setLoading(false));
   }, []);
 
-  function update(patch: Partial<PantryState>) {
-    setState((s) => ({ ...s, ...patch }));
+  function edit(field: TextField, value: string) {
+    setText((current) => ({ ...current, [field]: value }));
     setSaved(false);
+    setError(null);
   }
 
   function toggleCookware(item: Equipment) {
-    update({
-      cookware: state.cookware.includes(item)
-        ? state.cookware.filter((c) => c !== item)
-        : [...state.cookware, item],
-    });
+    setCookware((current) =>
+      current.includes(item) ? current.filter((c) => c !== item) : [...current, item],
+    );
+    setSaved(false);
+    setError(null);
   }
 
   async function persist() {
     setSaving(true);
+    setError(null);
     try {
-      setState(await savePantry(state));
+      const next = await savePantry({
+        pantry: toItems(text.pantry),
+        dislikes: toItems(text.dislikes),
+        dietary: toItems(text.dietary),
+        cookware,
+      });
+      // Re-render from what the server actually stored, so the box always shows
+      // the evidence the verifier will really use — not what you hoped it saved.
+      setText({
+        pantry: toText(next.pantry),
+        dislikes: toText(next.dislikes),
+        dietary: toText(next.dietary),
+      });
+      setCookware(next.cookware);
       setSaved(true);
+    } catch (err) {
+      // A rejected save used to disappear into an unhandled promise: the button
+      // returned to "Save kitchen" and the pantry stayed empty, so every recipe
+      // was silently generated against no evidence at all. Never swallow this.
+      setError(err instanceof Error ? err.message : "Couldn't save your kitchen.");
     } finally {
       setSaving(false);
     }
   }
-
-  const toLines = (items: string[]) => items.join("\n");
-  const fromLines = (text: string) =>
-    text
-      .split("\n")
-      .map((l) => l.trim())
-      .filter(Boolean);
 
   if (loading) {
     return (
@@ -80,20 +124,22 @@ export function PantryPanel() {
         <label className="mt-4 block text-sm font-medium text-slate-700">
           What you have
           <textarea
-            value={toLines(state.pantry)}
-            onChange={(e) => update({ pantry: fromLines(e.target.value) })}
+            value={text.pantry}
+            onChange={(e) => edit("pantry", e.target.value)}
             rows={8}
             placeholder={"chicken thighs\nonion\nrice\nsoy sauce"}
             className="mt-1.5 w-full rounded-lg border border-slate-200 p-2 font-normal text-slate-800 placeholder:text-slate-300 focus:border-brand-500 focus:outline-none"
           />
-          <span className="text-xs font-normal text-slate-400">One item per line.</span>
+          <span className="text-xs font-normal text-slate-400">
+            One item per line. Commas work too.
+          </span>
         </label>
 
         <label className="mt-4 block text-sm font-medium text-slate-700">
           Never suggest
           <textarea
-            value={toLines(state.dislikes)}
-            onChange={(e) => update({ dislikes: fromLines(e.target.value) })}
+            value={text.dislikes}
+            onChange={(e) => edit("dislikes", e.target.value)}
             rows={3}
             placeholder={"coriander\nolives"}
             className="mt-1.5 w-full rounded-lg border border-slate-200 p-2 font-normal text-slate-800 placeholder:text-slate-300 focus:border-brand-500 focus:outline-none"
@@ -103,8 +149,8 @@ export function PantryPanel() {
         <label className="mt-4 block text-sm font-medium text-slate-700">
           Dietary
           <textarea
-            value={toLines(state.dietary)}
-            onChange={(e) => update({ dietary: fromLines(e.target.value) })}
+            value={text.dietary}
+            onChange={(e) => edit("dietary", e.target.value)}
             rows={2}
             placeholder={"vegetarian"}
             className="mt-1.5 w-full rounded-lg border border-slate-200 p-2 font-normal text-slate-800 placeholder:text-slate-300 focus:border-brand-500 focus:outline-none"
@@ -127,7 +173,7 @@ export function PantryPanel() {
 
         <div className="mt-3 flex flex-wrap gap-1.5">
           {APPLIANCES.map((item) => {
-            const on = state.cookware.includes(item);
+            const on = cookware.includes(item);
             return (
               <button
                 key={item}
@@ -147,7 +193,7 @@ export function PantryPanel() {
           })}
         </div>
 
-        {state.cookware.length === 0 && (
+        {cookware.length === 0 && (
           <p className="mt-3 rounded-lg bg-amber-50 p-2 text-xs text-amber-900 ring-1 ring-amber-200">
             Nothing ticked — recipes will use hand tools only, which is very limiting. Tick at least
             your stovetop or oven.
@@ -155,8 +201,18 @@ export function PantryPanel() {
         )}
       </section>
 
+      {error && (
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-800 ring-1 ring-red-200"
+        >
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+
       <button
-        onClick={persist}
+        onClick={() => void persist()}
         disabled={saving}
         className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-slate-800 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-900 disabled:bg-slate-300"
       >
