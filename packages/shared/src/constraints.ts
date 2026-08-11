@@ -18,10 +18,17 @@ export const CookRequestSchema = z
     effort: z.enum(EFFORT_LEVELS).default("moderate"),
     /** If false, every ingredient must be pantry or staple. */
     willShop: z.boolean().default(true),
-    /** Free-text pantry lines, one item per entry. */
-    pantry: z.array(z.string().min(1).max(80)).max(200).default([]),
-    dislikes: z.array(z.string().min(1).max(80)).max(100).default([]),
-    dietary: z.array(z.string().min(1).max(80)).max(20).default([]),
+    /**
+     * Free-text pantry lines, one item per entry.
+     *
+     * 120 rather than 80: the tighter bound was reachable in normal use (a
+     * comma-separated list typed on one line), and hitting it produced a 400
+     * that silently emptied the pantry. Give real entries headroom — the cap
+     * exists to stop abuse, not to police phrasing.
+     */
+    pantry: z.array(z.string().min(1).max(120)).max(200).default([]),
+    dislikes: z.array(z.string().min(1).max(120)).max(100).default([]),
+    dietary: z.array(z.string().min(1).max(120)).max(20).default([]),
     /**
      * Appliances the user actually owns. Asked once at onboarding, then
      * treated exactly like the pantry: evidence the recipe is grounded
