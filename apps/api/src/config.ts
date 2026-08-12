@@ -33,3 +33,12 @@ if (!parsed.success) {
 
 export const config = parsed.data;
 export type Config = typeof config;
+
+/**
+ * The model's reasoning budget — a cost axis independent of model choice.
+ *
+ * Not to be confused with `CookRequest.effort` (`minimal | moderate | project`),
+ * which is how much work the *cook* wants to do. Same word, unrelated concepts;
+ * they're logged in separate columns for exactly that reason.
+ */
+export type ReasoningEffort = Config["RECIPE_EFFORT"];
