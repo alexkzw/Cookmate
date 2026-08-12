@@ -105,7 +105,10 @@ chatRoutes.post("/stream", requireAuth, async (c) => {
         err instanceof RecipeGenerationError
           ? err.message
           : "Something went wrong generating that recipe.";
-      failTurn(turnId, code);
+      // A failed generation is still a billed generation — carry its usage into
+      // the turn log so the cost of failure is visible, not just its existence.
+      const usage = err instanceof RecipeGenerationError ? err.usage : undefined;
+      failTurn(turnId, code, usage);
       console.error(`[chat] turn ${turnId} failed (${code}):`, err);
       await send({ type: "error", message, code });
     }
