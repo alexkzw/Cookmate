@@ -32,8 +32,14 @@ statsRoutes.get("/", (c) => {
       COALESCE(SUM(cooked = 1), 0)                      AS cooked,
       COALESCE(SUM(rating = 'up'), 0)                   AS up,
       COALESCE(SUM(rating = 'down'), 0)                 AS down,
+      -- Spend covers every turn, failures included: a truncated generation is
+      -- billed like any other, and the point of this number is the real bill.
       SUM(cost_usd)                                     AS cost,
-      AVG(latency_ms)                                   AS latency
+      -- Latency is deliberately scoped to turns that produced a recipe. Since
+      -- failures started recording their timings too, averaging them in would
+      -- quietly answer "how long does a call take" instead of "how long does a
+      -- recipe take" — and a fast failure would look like an improvement.
+      AVG(CASE WHEN recipe_json IS NOT NULL THEN latency_ms END) AS latency
     FROM turns
   `);
 
