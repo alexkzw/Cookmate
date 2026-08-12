@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { CookRequest, Recipe, Verification } from "@cookmate/shared";
 import { db } from "../db/index.js";
-import type { CacheStatus } from "../llm/models.js";
+import type { CallUsage } from "../llm/models.js";
 
 /**
  * Turn logging.
@@ -35,17 +35,9 @@ export function openTurn(userId: string, request: CookRequest): string {
   return id;
 }
 
-export interface TurnCompletion {
+export interface TurnCompletion extends CallUsage {
   recipe: Recipe;
   verification: Verification;
-  model: string;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  cacheStatus: CacheStatus;
-  costUsd: number;
-  latencyMs: number;
 }
 
 export function completeTurn(turnId: string, result: TurnCompletion): void {
@@ -72,11 +64,45 @@ export function completeTurn(turnId: string, result: TurnCompletion): void {
     result.costUsd,
     result.latencyMs,
     turnId,
-  );
+  );  
 }
 
-export function failTurn(turnId: string, code: string): void {
-  db.prepare(`UPDATE turns SET error_code = ? WHERE id = ?`).run(code, turnId);
+/**
+ * Record a failed turn — with its cost, when the call got far enough to have
+ * one.
+ *
+ * A refusal, a truncation or an unparseable response is still a billed call.
+ * Logging only the error code meant the failures were the one category of turn
+ * with no spend recorded against them, so `/api/stats` under-reported the true
+ * bill and the most diagnostic turns were the least observable. `usage` is
+ * absent only when the stream never completed at all — a network error or a
+ * client abort — where nothing was reported to bill.
+ */
+export function failTurn(turnId: string, code: string, usage?: CallUsage): void {
+  if (!usage) {
+    db.prepare(`UPDATE turns SET error_code = ? WHERE id = ?`).run(code, turnId);
+    return;
+  }
+
+  db.prepare(
+    `UPDATE turns SET
+       error_code = ?,
+       model = ?, input_tokens = ?, output_tokens = ?,
+       cache_read_tokens = ?, cache_write_tokens = ?, cache_status = ?,
+       cost_usd = ?, latency_ms = ?
+     WHERE id = ?`,
+  ).run(
+    code,
+    usage.model,
+    usage.inputTokens,
+    usage.outputTokens,
+    usage.cacheReadTokens,
+    usage.cacheWriteTokens,
+    usage.cacheStatus,
+    usage.costUsd,
+    usage.latencyMs,
+    turnId,
+  );
 }
 
 export function recordFeedback(
