@@ -45,7 +45,7 @@ export function completeTurn(turnId: string, result: TurnCompletion): void {
     `UPDATE turns SET
        recipe_json = ?, recipe_title = ?, verification_json = ?,
        verification_ok = ?, violation_count = ?,
-       model = ?, input_tokens = ?, output_tokens = ?,
+       model = ?, reasoning_effort = ?, input_tokens = ?, output_tokens = ?,
        cache_read_tokens = ?, cache_write_tokens = ?, cache_status = ?,
        cost_usd = ?, latency_ms = ?
      WHERE id = ?`,
@@ -56,6 +56,7 @@ export function completeTurn(turnId: string, result: TurnCompletion): void {
     result.verification.ok ? 1 : 0,
     result.verification.violations.length,
     result.model,
+    result.effort,
     result.inputTokens,
     result.outputTokens,
     result.cacheReadTokens,
@@ -87,13 +88,14 @@ export function failTurn(turnId: string, code: string, usage?: CallUsage): void 
   db.prepare(
     `UPDATE turns SET
        error_code = ?,
-       model = ?, input_tokens = ?, output_tokens = ?,
+       model = ?, reasoning_effort = ?, input_tokens = ?, output_tokens = ?,
        cache_read_tokens = ?, cache_write_tokens = ?, cache_status = ?,
        cost_usd = ?, latency_ms = ?
      WHERE id = ?`,
   ).run(
     code,
     usage.model,
+    usage.effort,
     usage.inputTokens,
     usage.outputTokens,
     usage.cacheReadTokens,
