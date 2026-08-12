@@ -18,6 +18,8 @@
  * input price and see cache_read_input_tokens: 0 with no error to tell you.
  */
 
+import type { ReasoningEffort } from "../config.js";
+
 export type Tier = "fast" | "balanced" | "deep";
 
 export interface ModelSpec {
@@ -121,6 +123,8 @@ export interface CallUsage extends TokenUsage {
   costUsd: number;
   cacheStatus: CacheStatus;
   model: string;
+  /** Reasoning budget the call ran at — the other half of "which config was this?". */
+  effort: ReasoningEffort;
   latencyMs: number;
 }
 
