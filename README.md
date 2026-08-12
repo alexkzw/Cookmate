@@ -106,11 +106,45 @@ You don't pick *a* model — you pick a portfolio and match each call site to it
 | Photo → ingredient list (v2) | `claude-haiku-4-5` | High volume, no judgment, structured extraction |
 | Cuisine tagging, intent routing | `claude-haiku-4-5` | Near-binary, latency-critical |
 | **Recipe generation** | `claude-opus-5` (default) | The user-facing turn; hard constraint satisfaction |
-| Cost-optimised alternative | `claude-sonnet-5` | ~40% cheaper per turn — **measure on your eval set before switching** |
+| Cost-optimised alternative | `claude-sonnet-5` | **35% cheaper per turn, measured** (see the sweep below) |
 
 Configured via `RECIPE_MODEL`, so switching is an env var and a measurement, not a refactor. See [`apps/api/src/llm/models.ts`](apps/api/src/llm/models.ts) for the full table.
 
-**Effort is a separate cost axis from model choice.** `RECIPE_EFFORT` (`low`…`max`) controls spend independently on Opus 5 and Sonnet 5. Opus at `medium` is genuinely strong, so "Opus is too expensive" is often a false economy that should have been an effort sweep. Run the sweep before you downgrade the tier.
+**Effort is a separate cost axis from model choice.** `RECIPE_EFFORT` (`low`…`max`) controls spend independently on Opus 5 and Sonnet 5, and it moves cost and latency more than the tier does. Sweep it before you downgrade the tier.
+
+### The sweep, measured
+
+Two fixed cases — one hard (15 min, no shopping, two dietary tags, stovetop
+only, two trap ingredients) and one easy — run across four configurations. Every
+run was a cache `MISS`, so the costs are like-for-like.
+
+| Condition | Cost (hard) | Cost (easy) | Latency | Output tok |
+| --- | --- | --- | --- | --- |
+| `sonnet-5` / medium | **$0.0440** | **$0.0494** | 23.2s | 2,017 |
+| `opus-5` / low | $0.0644 | $0.0622 | **19.1s** | 1,662 |
+| `opus-5` / medium *(default)* | $0.0676 | $0.0766 | 25.2s | 1,789 |
+| `opus-5` / high | $0.0900 | $0.1005 | 32.2s | 2,687 |
+
+Three findings:
+
+1. **Sonnet is 35% cheaper than Opus/medium**, consistently across both cases —
+   not the ~40% previously assumed from list prices.
+2. **Effort costs more than the tier does.** `high` is 40–62% more expensive than
+   `low` and **69% slower**, because effort mostly buys output tokens (1,662 →
+   2,687) and output bills at $25/MTok.
+3. **`low` was cheapest *and* fastest of the three Opus settings**, with no
+   observed quality difference. The default of `medium` currently buys nothing
+   measurable.
+
+**No quality conclusion is drawn, deliberately.** Eight runs against a ~93%
+baseline pass rate cannot distinguish a 95% model from an 80% one — and the sole
+verification failure landed on `opus/medium`, the default, which illustrates the
+point. Establishing that needs the eval harness, not a sweep.
+
+**Provisional:** changing `RECIPE_EFFORT` appears to invalidate the prompt cache.
+Two runs 92 seconds apart on the same model, differing only in effort, both
+wrote the cache rather than reading it. Worth confirming with a dedicated
+three-call test before relying on it.
 
 ### Cost, honestly
 
@@ -227,5 +261,6 @@ Deliberately out of scope: real-time supermarket stock checking (no reliable API
 ### Known limitations
 
 - Ingredient matching is lexical (normalise + head-noun rules), so it will miss synonyms like "aubergine"/"eggplant". Real fix is a small embedding lookup; the current rules are deliberately predictable and testable instead.
-- `DIETARY_FORBIDDEN` is a hand-maintained list. It catches the common cases and will have gaps — extend it as real users hit them.
+- `DIETARY_FORBIDDEN` is a hand-maintained list, and the gaps are real: **"steak" is not on it**, so under a `pescatarian` tag a beef *stock* is flagged while a beef *steak* passes. That is the same free-text weakness as above, and the sharpest illustration of why `equipment` is an enum — the two checks sit side by side, and only the closed-vocabulary one is trivially correct.
+- **Every verification failure recorded so far has been `step_time_mismatch`** (4 for 4): the model's step times don't sum to its own stated total. That's a systematic prompt weakness rather than noise, and it's the first target for the eval harness — deliberately left unfixed so the fix can be measured against a baseline.
 - The streaming preview scrapes `title`/`summary` with a regex rather than a full partial-JSON parser. Cheap, and enough to make the wait feel like progress.
