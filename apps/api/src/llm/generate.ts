@@ -44,6 +44,7 @@ function summariseUsage(
     costUsd: computeCostUsd(model, tokens),
     cacheStatus: classifyCache(tokens),
     model,
+    effort: config.RECIPE_EFFORT,
     latencyMs: Date.now() - startedAt,
   };
 }
