@@ -100,6 +100,10 @@ function addColumnIfMissing(table: string, column: string, definition: string): 
 
 addColumnIfMissing("preferences", "cookware", "TEXT NOT NULL DEFAULT '[]'");
 addColumnIfMissing("turns", "cookware_json", "TEXT");
+// The model's reasoning budget (low…max). Distinct from the `effort` column
+// above, which is the *cook's* effort preference (minimal | moderate | project).
+// Without this, a model/effort sweep can't attribute a result to its condition.
+addColumnIfMissing("turns", "reasoning_effort", "TEXT");
 
 export function upsertUser(id: string, email: string | null, displayName: string | null): void {
   db.prepare(
