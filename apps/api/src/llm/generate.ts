@@ -4,21 +4,48 @@ import { RecipeSchema, type CookRequest, type Recipe } from "@cookmate/shared";
 import { anthropic } from "./client.js";
 import { config } from "../config.js";
 import { SYSTEM_PROMPT, buildUserTurn } from "./prompts.js";
-import { classifyCache, computeCostUsd, type CacheStatus, type TokenUsage } from "./models.js";
+import { classifyCache, computeCostUsd, type CallUsage, type TokenUsage } from "./models.js";
 
 export interface GenerationResult {
   recipe: Recipe;
-  usage: TokenUsage & { costUsd: number; cacheStatus: CacheStatus; model: string; latencyMs: number };
+  usage: CallUsage;
 }
 
 export class RecipeGenerationError extends Error {
   constructor(
     message: string,
     readonly code: string,
+    /**
+     * Usage for the call that failed, when we got far enough to have it.
+     * Undefined only when the stream itself never completed — a network error,
+     * a client abort, or an API error — where no usage was ever reported.
+     */
+    readonly usage?: CallUsage,
   ) {
     super(message);
     this.name = "RecipeGenerationError";
   }
+}
+
+/** Tokens → money, cache verdict and wall-clock time for one completed call. */
+function summariseUsage(
+  message: Anthropic.Message,
+  model: string,
+  startedAt: number,
+): CallUsage {
+  const tokens: TokenUsage = {
+    inputTokens: message.usage.input_tokens ?? 0,
+    outputTokens: message.usage.output_tokens ?? 0,
+    cacheReadTokens: message.usage.cache_read_input_tokens ?? 0,
+    cacheWriteTokens: message.usage.cache_creation_input_tokens ?? 0,
+  };
+  return {
+    ...tokens,
+    costUsd: computeCostUsd(model, tokens),
+    cacheStatus: classifyCache(tokens),
+    model,
+    latencyMs: Date.now() - startedAt,
+  };
 }
 
 /**
@@ -73,6 +100,12 @@ export async function streamRecipe(
 
   const message = await stream.finalMessage();
 
+  // Summarise usage BEFORE any failure check. Every branch below is a call we
+  // were billed for, so each one carries its cost out with it — otherwise the
+  // most interesting turns (the ones that failed) are the only turns with no
+  // cost recorded against them.
+  const usage = summariseUsage(message, model, startedAt);
+
   // Always check stop_reason before touching content. A refusal returns HTTP
   // 200 with empty or partial content, so indexing content[0] blindly throws.
   // (A recipe app has essentially no refusal surface, which is why we don't
@@ -81,12 +114,14 @@ export async function streamRecipe(
     throw new RecipeGenerationError(
       "The model declined this request. Try rephrasing what you're craving.",
       "refusal",
+      usage,
     );
   }
   if (message.stop_reason === "max_tokens") {
     throw new RecipeGenerationError(
       "The recipe was cut off before it finished. Try a simpler request.",
       "truncated",
+      usage,
     );
   }
 
@@ -96,7 +131,11 @@ export async function streamRecipe(
     .join("");
 
   if (!text.trim()) {
-    throw new RecipeGenerationError("The model returned an empty response.", "empty_response");
+    throw new RecipeGenerationError(
+      "The model returned an empty response.",
+      "empty_response",
+      usage,
+    );
   }
 
   // Structured outputs make this parse near-certain to succeed, but we still
@@ -109,24 +148,9 @@ export async function streamRecipe(
     throw new RecipeGenerationError(
       `Model output did not match the recipe schema: ${err instanceof Error ? err.message : String(err)}`,
       "schema_mismatch",
+      usage,
     );
   }
 
-  const usage: TokenUsage = {
-    inputTokens: message.usage.input_tokens ?? 0,
-    outputTokens: message.usage.output_tokens ?? 0,
-    cacheReadTokens: message.usage.cache_read_input_tokens ?? 0,
-    cacheWriteTokens: message.usage.cache_creation_input_tokens ?? 0,
-  };
-
-  return {
-    recipe,
-    usage: {
-      ...usage,
-      costUsd: computeCostUsd(model, usage),
-      cacheStatus: classifyCache(usage),
-      model,
-      latencyMs: Date.now() - startedAt,
-    },
-  };
+  return { recipe, usage };
 }
