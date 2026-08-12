@@ -1,0 +1,42 @@
+name: CI
+
+# "unit-tested in CI" - The 23 constraint tests are the product's actual claim, 
+# so a change that breaks them should never reach main quietly.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Reads the version from package.json's `packageManager` field, so the
+      # pinned pnpm here can never drift from the one used locally.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # better-sqlite3 compiles from source when no prebuild matches; the root
+      # package.json's `onlyBuiltDependencies` is what permits that under pnpm.
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      # No ANTHROPIC_API_KEY needed: the verifier is deterministic code with no
+      # model call, which is the whole point. Nothing in the suite hits the API,
+      # so CI costs nothing and can't be flaky on someone else's uptime.
+      - name: Test
+        run: pnpm test
