@@ -91,7 +91,7 @@ CREATE INDEX IF NOT EXISTS idx_turns_created ON turns(created_at DESC);
  * covers fresh databases — an existing dev database predates the cookware
  * column, so add it in place rather than making people delete their data.
  */
-function addColumnIfMissing(table: string, column: string, definition: string): void {
+export function addColumnIfMissing(table: string, column: string, definition: string): void {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
   if (!cols.some((c) => c.name === column)) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
