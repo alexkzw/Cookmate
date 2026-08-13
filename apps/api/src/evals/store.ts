@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { db } from "../db/index.js";
+import { execFileSync } from "node:child_process";
+import { db, addColumnIfMissing } from "../db/index.js";
 import { SYSTEM_PROMPT } from "../llm/prompts.js";
 import type { Verification } from "@cookmate/shared";
 import type { CallUsage } from "../llm/models.js";
@@ -50,6 +51,30 @@ CREATE INDEX IF NOT EXISTS idx_eval_suite ON eval_runs(suite_id);
 CREATE INDEX IF NOT EXISTS idx_eval_fixture ON eval_runs(fixture_id);
 `);
 
+// Provenance, added after the first version of this table shipped.
+addColumnIfMissing("eval_runs", "fixture_set_hash", "TEXT");
+addColumnIfMissing("eval_runs", "git_sha", "TEXT");
+
+/**
+ * The commit the suite ran against.
+ *
+ * Three things now identify a result: which prompt, which fixtures, which code.
+ * Without the third, a verifier change looks exactly like a model change in the
+ * table — and the verifier is the thing computing the metric.
+ */
+function gitSha(): string {
+  try {
+    return execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return "unknown"; // not a git checkout, or git isn't installed
+  }
+}
+
+const GIT_SHA = gitSha();
+
 /**
  * A content hash of the system prompt, recorded on every run.
  *
@@ -76,6 +101,7 @@ export interface EvalRow {
   /** Present only when the call failed before any usage was reported. */
   model?: string;
   effort?: string;
+  fixtureSetHash: string;
 }
 
 export function recordRun(row: EvalRow): void {
@@ -83,11 +109,11 @@ export function recordRun(row: EvalRow): void {
   db.prepare(
     `INSERT INTO eval_runs (
        id, suite_id, fixture_id, repeat_index,
-       model, effort, prompt_hash,
+       model, effort, prompt_hash, fixture_set_hash, git_sha,
        verification_ok, violation_count, violation_kinds, recipe_title, recipe_json, error_code,
        input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
        cache_status, cost_usd, latency_ms
-     ) VALUES (?,?,?,?, ?,?,?, ?,?,?,?,?,?, ?,?,?,?, ?,?,?)`,
+     ) VALUES (?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?, ?,?,?,?, ?,?,?)`,
   ).run(
     row.id,
     row.suiteId,
@@ -96,6 +122,8 @@ export function recordRun(row: EvalRow): void {
     row.usage?.model ?? row.model ?? "unknown",
     row.usage?.effort ?? row.effort ?? "unknown",
     promptHash(),
+    row.fixtureSetHash,
+    GIT_SHA,
     v ? (v.ok ? 1 : 0) : null,
     v ? v.violations.length : null,
     v ? [...new Set(v.violations.map((x) => x.kind))].sort().join(",") : null,
@@ -116,6 +144,8 @@ export interface ConditionSummary {
   model: string;
   effort: string;
   prompt_hash: string;
+  fixture_set_hash: string;
+  git_sha: string;
   n: number;
   passed: number;
   errors: number;
@@ -128,7 +158,7 @@ export interface ConditionSummary {
 export function summariseByCondition(suiteId?: string): ConditionSummary[] {
   return db
     .prepare(
-      `SELECT model, effort, prompt_hash,
+      `SELECT model, effort, prompt_hash, fixture_set_hash, git_sha,
               COUNT(*)                                   AS n,
               COALESCE(SUM(verification_ok = 1), 0)      AS passed,
               COALESCE(SUM(error_code IS NOT NULL), 0)   AS errors,
@@ -137,7 +167,7 @@ export function summariseByCondition(suiteId?: string): ConditionSummary[] {
               COALESCE(AVG(latency_ms), 0)               AS avg_latency
        FROM eval_runs
        WHERE (? IS NULL OR suite_id = ?)
-       GROUP BY model, effort, prompt_hash
+       GROUP BY model, effort, prompt_hash, fixture_set_hash, git_sha
        ORDER BY avg_cost`,
     )
     .all(suiteId ?? null, suiteId ?? null) as ConditionSummary[];
