@@ -6,5 +6,6 @@
     "rootDir": "src"
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/**/*.test.ts"]
+  // Tests and evals are typechecked but never shipped to a server.
+  "exclude": ["src/**/*.test.ts", "src/evals/**"]
 }
