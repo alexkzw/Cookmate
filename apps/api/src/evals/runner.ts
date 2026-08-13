@@ -3,7 +3,7 @@ import { verifyRecipe } from "../verify/constraints.js";
 import { streamRecipe, RecipeGenerationError } from "../llm/generate.js";
 import { config } from "../config.js";
 import { recordRun, promptHash } from "./store.js";
-import type { Fixture } from "./fixtures.js";
+import { fixtureSetHash, type Fixture } from "./fixtures.js";
 
 /**
  * The suite runner.
@@ -36,6 +36,7 @@ export interface SuiteResult {
 
 export async function runSuite(opts: SuiteOptions): Promise<SuiteResult> {
   const suiteId = randomUUID().slice(0, 8);
+  const setHash = fixtureSetHash(opts.fixtures);
   const log = opts.onProgress ?? (() => {});
 
   const total = opts.fixtures.length * opts.repeats;
@@ -46,7 +47,8 @@ export async function runSuite(opts: SuiteOptions): Promise<SuiteResult> {
 
   log(
     `suite ${suiteId} · ${opts.fixtures.length} fixtures × ${opts.repeats} ` +
-      `= ${total} runs · ${config.RECIPE_MODEL} / ${config.RECIPE_EFFORT} · prompt ${promptHash()}`,
+      `= ${total} runs · ${config.RECIPE_MODEL} / ${config.RECIPE_EFFORT} · ` +
+      `prompt ${promptHash()} · fixtures ${setHash}`,
   );
 
   for (const fixture of opts.fixtures) {
@@ -67,6 +69,7 @@ export async function runSuite(opts: SuiteOptions): Promise<SuiteResult> {
           suiteId,
           fixtureId: fixture.id,
           repeatIndex: i,
+          fixtureSetHash: setHash,
           usage,
           verification,
           recipeTitle: recipe.title,
@@ -93,6 +96,7 @@ export async function runSuite(opts: SuiteOptions): Promise<SuiteResult> {
           suiteId,
           fixtureId: fixture.id,
           repeatIndex: i,
+          fixtureSetHash: setHash,
           usage,
           errorCode: code,
           model: config.RECIPE_MODEL,

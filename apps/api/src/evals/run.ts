@@ -1,5 +1,5 @@
 import { config } from "../config.js";
-import { getFixtures, FIXTURES } from "./fixtures.js";
+import { getFixtures, fixtureSetHash, FIXTURES } from "./fixtures.js";
 import { runSuite } from "./runner.js";
 import {
   summariseByCondition,
@@ -48,6 +48,8 @@ function report(suiteId?: string): void {
     conditions.map((c) => ({
       condition: `${c.model} / ${c.effort}`,
       prompt: c.prompt_hash,
+      fixtures: c.fixture_set_hash,
+      git: c.git_sha,
       n: c.n,
       passed: `${c.passed}/${c.n}`,
       pass_rate: pct(c.pass_rate),
@@ -92,7 +94,7 @@ async function main(): Promise<void> {
 
   console.log(
     `\n${runs} live generations · ${config.RECIPE_MODEL} / ${config.RECIPE_EFFORT} · ` +
-      `prompt ${promptHash()}\n` +
+      `prompt ${promptHash()} · fixtures ${fixtureSetHash(fixtures)}\n` +
       `estimated cost ≈ ${fmtUsd(runs * perRun)} · estimated time ≈ ${Math.ceil((runs * 26) / 60)} min\n`,
   );
 
