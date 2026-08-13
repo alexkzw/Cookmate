@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { CookRequest } from "@cookmate/shared";
 
 /**
@@ -128,7 +129,104 @@ export const FIXTURES: Fixture[] = [
       cookware: ["stovetop", "oven"],
     },
   },
+
+  /**
+   * TIME-ARITHMETIC BLOCK.
+   *
+   * `step_time_mismatch` is the only violation kind this app has ever produced
+   * (4 for 4 at the time of writing), so it's the first thing the prompt will
+   * be changed to fix — and a fix is unmeasurable if the baseline only trips it
+   * three or four times. These cases deliberately over-sample the failure mode:
+   * many stages, parallel work, and passive stretches that invite double
+   * counting.
+   *
+   * The trade this makes is explicit: the *aggregate* pass rate across this set
+   * is no longer representative of production traffic. That's fine, because the
+   * aggregate isn't the instrument — the per-kind and per-fixture tables are.
+   * An enriched suite is a diagnostic, not a simulation.
+   */
+  {
+    id: "time-multi-component",
+    probes: "step_time_mismatch — several components must be timed together",
+    request: {
+      ...base,
+      craving: "a proper roast dinner with a couple of sides",
+      maxMinutes: 90,
+      effort: "project",
+      willShop: true,
+      pantry: ["chicken", "potato", "carrot", "green beans", "butter", "flour", "stock"],
+      cookware: ["stovetop", "oven"],
+    },
+  },
+  {
+    id: "time-parallel-work",
+    probes: "step_time_mismatch — work overlaps, so naive summing overshoots",
+    request: {
+      ...base,
+      craving: "curry and rice, both ready at the same time",
+      maxMinutes: 40,
+      willShop: true,
+      pantry: ["chicken thigh", "rice", "onion", "garlic", "ginger", "curry powder", "coconut milk"],
+      cookware: ["stovetop"],
+    },
+  },
+  {
+    id: "time-proving-dough",
+    probes: "step_time_mismatch + passive — a long hands-off stretch mid-recipe",
+    request: {
+      ...base,
+      craving: "fresh flatbreads to go with dinner",
+      maxMinutes: 75,
+      effort: "project",
+      willShop: true,
+      pantry: ["plain flour", "yoghurt", "yeast", "olive oil", "garlic", "butter"],
+      cookware: ["stovetop", "oven"],
+    },
+  },
+  {
+    id: "time-tight-marinade",
+    probes: "over_time — the obvious method needs more time than the budget",
+    request: {
+      ...base,
+      craving: "something marinated and grilled",
+      maxMinutes: 30,
+      willShop: true,
+      pantry: ["chicken thigh", "yoghurt", "lemon", "garlic", "paprika", "flatbread"],
+      cookware: ["stovetop", "grill"],
+    },
+  },
+  {
+    id: "time-many-small-steps",
+    probes: "step_time_mismatch — lots of short stages that must still add up",
+    request: {
+      ...base,
+      craving: "a composed salad with several prepped elements and a dressing",
+      maxMinutes: 35,
+      willShop: true,
+      pantry: [
+        "chickpeas", "cucumber", "tomato", "red onion", "feta",
+        "lemon", "olive oil", "mint", "pita",
+      ],
+      cookware: ["stovetop", "oven"],
+    },
+  },
 ];
+
+/**
+ * A content hash of the whole fixture set.
+ *
+ * Same reasoning as `promptHash()`: two suites are only comparable if they ran
+ * the same cases. Add a fixture next month and the aggregate pass rate moves
+ * for reasons that have nothing to do with the model — this makes that visible
+ * instead of silent.
+ */
+export function fixtureSetHash(fixtures: Fixture[] = FIXTURES): string {
+  const canonical = [...fixtures]
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((f) => `${f.id}:${JSON.stringify(f.request)}`)
+    .join("|");
+  return createHash("sha256").update(canonical).digest("hex").slice(0, 8);
+}
 
 export function getFixtures(ids?: string[]): Fixture[] {
   if (!ids || ids.length === 0) return FIXTURES;
