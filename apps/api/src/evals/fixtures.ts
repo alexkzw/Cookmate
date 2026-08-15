@@ -20,6 +20,22 @@ export interface Fixture {
   /** Which constraint this case is designed to stress. */
   probes: string;
   request: CookRequest;
+  /**
+   * What a correct system should produce.
+   *
+   * Every fixture here is satisfiable, so the expectation is always `ok: true`.
+   * A failure therefore means one of two things — the model got it wrong, or the
+   * verifier did — and the report flags it for inspection rather than folding it
+   * into a pass rate that can't tell those apart. That distinction is precisely
+   * what was missing when this suite reported 83% while the model was right and
+   * the checker was wrong.
+   *
+   * Note this is not a full confusion matrix, and can't be: the verifier's
+   * ability to *detect* violations needs a known-bad recipe, which you can't
+   * pre-declare when the recipe is generated fresh each run. That side is
+   * covered by the unit tests, where the recipe is fixed.
+   */
+  expect: { ok: boolean };
 }
 
 /** Everything a CookRequest needs, minus the bits each fixture overrides. */
@@ -34,6 +50,7 @@ export const FIXTURES: Fixture[] = [
   {
     id: "easy-chicken",
     probes: "baseline — nothing binding, everything should pass",
+    expect: { ok: true },
     request: {
       ...base,
       craving: "something quick and comforting with chicken",
@@ -49,6 +66,7 @@ export const FIXTURES: Fixture[] = [
   {
     id: "hard-veg-stovetop",
     probes: "dietary_conflict — two trap ingredients, three tags, no oven",
+    expect: { ok: true },
     request: {
       ...base,
       craving: "something warming and savoury with a rich umami depth",
@@ -67,6 +85,7 @@ export const FIXTURES: Fixture[] = [
   {
     id: "tight-time",
     probes: "over_time + step_time_mismatch — the known failure mode",
+    expect: { ok: true },
     request: {
       ...base,
       craving: "a proper dinner, not a sandwich",
@@ -79,6 +98,7 @@ export const FIXTURES: Fixture[] = [
   {
     id: "no-shopping",
     probes: "missing_ingredient — willShop off with a deliberately short pantry",
+    expect: { ok: true },
     request: {
       ...base,
       craving: "anything I can actually make right now",
@@ -91,6 +111,7 @@ export const FIXTURES: Fixture[] = [
   {
     id: "appliance-poor",
     probes: "missing_equipment — craving invites an oven the kitchen lacks",
+    expect: { ok: true },
     request: {
       ...base,
       craving: "something roasted and crispy",
@@ -103,6 +124,7 @@ export const FIXTURES: Fixture[] = [
   {
     id: "dislike-trap",
     probes: "disliked_ingredient — the disliked item is sitting in the pantry",
+    expect: { ok: true },
     request: {
       ...base,
       craving: "a fresh, zingy noodle salad",
@@ -119,6 +141,7 @@ export const FIXTURES: Fixture[] = [
   {
     id: "long-passive",
     probes: "active/passive split — most of the time should be hands-off",
+    expect: { ok: true },
     request: {
       ...base,
       craving: "a slow-cooked beef stew worth waiting for",
@@ -148,6 +171,7 @@ export const FIXTURES: Fixture[] = [
   {
     id: "time-multi-component",
     probes: "step_time_mismatch — several components must be timed together",
+    expect: { ok: true },
     request: {
       ...base,
       craving: "a proper roast dinner with a couple of sides",
@@ -161,6 +185,7 @@ export const FIXTURES: Fixture[] = [
   {
     id: "time-parallel-work",
     probes: "step_time_mismatch — work overlaps, so naive summing overshoots",
+    expect: { ok: true },
     request: {
       ...base,
       craving: "curry and rice, both ready at the same time",
@@ -173,6 +198,7 @@ export const FIXTURES: Fixture[] = [
   {
     id: "time-proving-dough",
     probes: "step_time_mismatch + passive — a long hands-off stretch mid-recipe",
+    expect: { ok: true },
     request: {
       ...base,
       craving: "fresh flatbreads to go with dinner",
@@ -186,6 +212,7 @@ export const FIXTURES: Fixture[] = [
   {
     id: "time-tight-marinade",
     probes: "over_time — the obvious method needs more time than the budget",
+    expect: { ok: true },
     request: {
       ...base,
       craving: "something marinated and grilled",
@@ -198,6 +225,7 @@ export const FIXTURES: Fixture[] = [
   {
     id: "time-many-small-steps",
     probes: "step_time_mismatch — lots of short stages that must still add up",
+    expect: { ok: true },
     request: {
       ...base,
       craving: "a composed salad with several prepped elements and a dressing",
