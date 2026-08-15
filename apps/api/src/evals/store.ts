@@ -59,6 +59,11 @@ addColumnIfMissing("eval_runs", "git_sha", "TEXT");
 // stored — a verifier that explains itself is worth nothing if you drop the
 // explanation on the way to the database.
 addColumnIfMissing("eval_runs", "verification_json", "TEXT");
+// Set when a row was re-scored from a stored recipe rather than generated. A
+// replay is a new measurement of the VERIFIER, not a new sample of the model —
+// replaying twice yields identical results — so it must never be mistaken for
+// an independent run when counting n.
+addColumnIfMissing("eval_runs", "replayed_from", "TEXT");
 
 /**
  * The commit the suite ran against.
@@ -107,6 +112,8 @@ export interface EvalRow {
   model?: string;
   effort?: string;
   fixtureSetHash: string;
+  /** Source suite id when this row was re-scored rather than generated. */
+  replayedFrom?: string;
 }
 
 export function recordRun(row: EvalRow): void {
@@ -114,11 +121,11 @@ export function recordRun(row: EvalRow): void {
   db.prepare(
     `INSERT INTO eval_runs (
        id, suite_id, fixture_id, repeat_index,
-       model, effort, prompt_hash, fixture_set_hash, git_sha,
+       model, effort, prompt_hash, fixture_set_hash, git_sha, replayed_from,
        verification_ok, violation_count, violation_kinds, verification_json, recipe_title, recipe_json, error_code,
        input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
        cache_status, cost_usd, latency_ms
-     ) VALUES (?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?, ?,?,?)`,
+     ) VALUES (?,?,?,?, ?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?, ?,?,?)`,
   ).run(
     row.id,
     row.suiteId,
@@ -129,6 +136,7 @@ export function recordRun(row: EvalRow): void {
     promptHash(),
     row.fixtureSetHash,
     GIT_SHA,
+    row.replayedFrom ?? null,
     v ? (v.ok ? 1 : 0) : null,
     v ? v.violations.length : null,
     v ? [...new Set(v.violations.map((x) => x.kind))].sort().join(",") : null,
