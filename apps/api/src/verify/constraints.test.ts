@@ -349,3 +349,127 @@ describe("active vs passive time", () => {
     expect(result.activeMinutes).toBe(13);
   });
 });
+
+/**
+ * REGRESSION: the two false positives the eval harness found on its first run.
+ *
+ * Both were cases where the verifier confidently contradicted a correct recipe.
+ * Neither was caught by the 23 tests that existed at the time, because those
+ * tests covered the cases I thought of — and I never thought of "tomatoes" or
+ * "coconut milk". These encode what the model actually produced.
+ */
+describe("regression: eval-discovered false positives", () => {
+  const { normalise, resolveSource, buildPantryIndex } = __testables;
+
+  describe("-oes plurals (eval fixture 'no-shopping', 3/3 false failures)", () => {
+    it("lemmatises tomatoes and potatoes correctly", () => {
+      // The old hand-rolled rule produced "tomatoe" — it handled -ies and
+      // -ses/-xes/-ches but had no -oes case, so it stripped a single "s".
+      expect(normalise("tomatoes")).toBe("tomato");
+      expect(normalise("potatoes")).toBe("potato");
+      expect(normalise("tinned tomatoes")).toBe("tinned tomato");
+    });
+
+    it("matches a pantry of 'tinned tomatoes' against a recipe's 'tinned tomato'", () => {
+      const index = buildPantryIndex(["pasta", "tinned tomatoes", "garlic", "parmesan", "onion"]);
+      expect(resolveSource("tinned tomato", index)).toBe("pantry");
+      expect(resolveSource("parmesan", index)).toBe("pantry");
+    });
+
+    it("does not put a stocked ingredient on the shopping list", () => {
+      const request: CookRequest = {
+        ...baseRequest,
+        willShop: false,
+        pantry: ["pasta", "tinned tomatoes", "garlic", "parmesan", "onion"],
+        dislikes: [],
+        cookware: ["stovetop"],
+      };
+      const r = recipe({
+        ingredients: [
+          { name: "tinned tomato", quantity: 400, unit: "g", source: "pantry", substitute: null },
+          { name: "pasta", quantity: 200, unit: "g", source: "pantry", substitute: null },
+        ],
+      });
+      const result = verifyRecipe(r, request);
+      expect(result.shoppingList).toEqual([]);
+      expect(result.violations).toEqual([]);
+    });
+  });
+
+  describe("compound nouns (eval fixture 'hard-veg-stovetop', 3/3 false failures)", () => {
+    it("does not treat plant milks as dairy", () => {
+      // "coconut milk".includes("milk") was true, so substring matching called
+      // it a dairy conflict. Attribute lookup makes the question decidable.
+      const request: CookRequest = {
+        ...baseRequest,
+        dietary: ["dairy-free"],
+        pantry: ["coconut milk", "almond milk", "soy milk"],
+        dislikes: [],
+      };
+      for (const milk of ["coconut milk", "almond milk", "soy milk"]) {
+        const r = recipe({
+          ingredients: [
+            { name: milk, quantity: 400, unit: "ml", source: "pantry", substitute: null },
+          ],
+        });
+        const result = verifyRecipe(r, request);
+        expect(result.violations.map((v) => v.kind)).not.toContain("dietary_conflict");
+        expect(result.shoppingList).toEqual([]);
+      }
+    });
+
+    it("still catches actual dairy", () => {
+      const request: CookRequest = { ...baseRequest, dietary: ["dairy-free"], dislikes: [] };
+      const r = recipe({
+        ingredients: [
+          { name: "butter", quantity: 40, unit: "g", source: "staple", substitute: null },
+        ],
+      });
+      const result = verifyRecipe(r, request);
+      expect(result.violations.map((v) => v.kind)).toContain("dietary_conflict");
+    });
+
+    it("keeps the vegetarian and gluten-free traps working", () => {
+      const request: CookRequest = {
+        ...baseRequest,
+        dietary: ["vegetarian", "gluten-free"],
+        pantry: ["soy sauce", "fish sauce"],
+        dislikes: [],
+      };
+      const r = recipe({
+        ingredients: [
+          { name: "soy sauce", quantity: 2, unit: "tbsp", source: "pantry", substitute: null },
+          { name: "fish sauce", quantity: 1, unit: "tbsp", source: "pantry", substitute: null },
+        ],
+      });
+      const kinds = verifyRecipe(r, request).violations.map((v) => v.kind);
+      expect(kinds.filter((k) => k === "dietary_conflict")).toHaveLength(2);
+    });
+  });
+
+  describe("uncertainty instead of confident guessing", () => {
+    it("reports an unknown ingredient as uncertain rather than a violation", () => {
+      const request: CookRequest = {
+        ...baseRequest,
+        dietary: ["vegan"],
+        pantry: ["gochujang"],
+        dislikes: [],
+      };
+      const r = recipe({
+        ingredients: [
+          { name: "gochujang", quantity: 1, unit: "tbsp", source: "pantry", substitute: null },
+        ],
+      });
+      const result = verifyRecipe(r, request);
+      expect(result.violations).toEqual([]);
+      expect(result.uncertain).toContain("gochujang");
+    });
+
+    it("does not silently pass a dietary tag it cannot verify", () => {
+      // "keto" has no rule, so every ingredient is unverifiable against it.
+      const request: CookRequest = { ...baseRequest, dietary: ["keto"], dislikes: [] };
+      const result = verifyRecipe(recipe(), request);
+      expect(result.uncertain.length).toBeGreaterThan(0);
+    });
+  });
+});
