@@ -6,6 +6,7 @@ import {
   summariseByFixture,
   summariseByKind,
   latestSuiteId,
+  unexpectedRuns,
   promptHash,
 } from "./store.js";
 
@@ -63,6 +64,14 @@ function report(suiteId?: string): void {
   console.log("\nBY VIOLATION KIND — what actually broke");
   if (kinds.length === 0) console.log("  (no violations recorded)");
   else console.table(kinds);
+
+  const expected = new Map(FIXTURES.map((f) => [f.id, f.expect.ok]));
+  const unexpected = unexpectedRuns(suiteId, expected);
+  console.log("\nUNEXPECTED OUTCOMES — every fixture here is satisfiable, so these are defects");
+  if (unexpected.length === 0) console.log("  (none — every run matched its expectation)");
+  else
+    for (const u of unexpected)
+      console.log(`  ${u.fixture_id} #${u.repeat_index + 1}: ${u.error_code ?? u.details ?? "failed"}`);
 
   console.log("\nBY FIXTURE — which cases carry the failure rate");
   console.table(
