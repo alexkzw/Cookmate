@@ -79,6 +79,17 @@ export const VerificationSchema = z
     passiveMinutes: z.number(),
     /** Appliances used that the user does own — shown as reassurance. */
     equipmentUsed: z.array(z.string()),
+    /**
+     * Ingredients the verifier could not confidently classify — not in the
+     * taxonomy, so no dietary attributes are known for them.
+     *
+     * A third state exists because the checker used to have only confident
+     * answers, and that is exactly how it came to insist that coconut milk was
+     * dairy. For a product whose whole claim is "the badge can be trusted", a
+     * confident wrong answer costs far more than an admitted gap — so anything
+     * unknown is surfaced as a question rather than asserted as a violation.
+     */
+    uncertain: z.array(z.string()),
   })
   .strict();
 export type Verification = z.infer<typeof VerificationSchema>;
