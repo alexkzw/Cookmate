@@ -1,6 +1,7 @@
 import { config } from "../config.js";
 import { getFixtures, fixtureSetHash, FIXTURES } from "./fixtures.js";
 import { runSuite } from "./runner.js";
+import { replaySuite, latestScorableSuite } from "./replay.js";
 import {
   summariseByCondition,
   summariseByFixture,
@@ -16,6 +17,8 @@ import {
  *   pnpm eval                          run every fixture once
  *   pnpm eval --repeats 3              three runs per fixture
  *   pnpm eval --only tight-time        just one case
+ *   pnpm eval --replay                 re-score the last suite's stored recipes
+ *   pnpm eval --replay <suiteId>       re-score a specific suite
  *   pnpm eval --report                 print the last suite, spend nothing
  *   pnpm eval --report --all           print every run ever recorded
  *   pnpm eval --yes                    skip the cost confirmation
@@ -85,6 +88,32 @@ function report(suiteId?: string): void {
 }
 
 async function main(): Promise<void> {
+  // Re-score stored recipes under the current verifier. Costs nothing: the
+  // generations already happened, and only the scorer changed.
+  if (flag("replay")) {
+    const source = value("replay") ?? latestScorableSuite();
+    if (!source) throw new Error("No suite with stored recipes to re-score.");
+
+    const r = replaySuite(source);
+    console.log(
+      `\nre-scored ${r.scored} stored recipes from suite ${r.sourceSuiteId} ` +
+        `-> new suite ${r.suiteId}\n` +
+        `  prompt ${promptHash()} · fixtures ${fixtureSetHash()} · $0.00 spent\n`,
+    );
+    if (r.skipped > 0) console.log(`  skipped ${r.skipped} run(s) whose fixture no longer exists`);
+    if (r.fixtureDrift)
+      console.log("  WARNING: fixtures changed since generation — comparison is not like-for-like\n");
+
+    console.log(`  passed before : ${r.passedBefore}/${r.scored}`);
+    console.log(`  passed after  : ${r.passedAfter}/${r.scored}`);
+    console.log(`  verdicts changed : ${r.changes.length}`);
+    for (const c of r.changes)
+      console.log(`    ${c.fixtureId} #${c.repeatIndex + 1}: ${c.was} -> ${c.now}`);
+
+    report(r.suiteId);
+    return;
+  }
+
   if (flag("report")) {
     report(flag("all") ? undefined : latestSuiteId());
     return;
