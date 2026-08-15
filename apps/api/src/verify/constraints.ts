@@ -5,6 +5,7 @@ import {
   type Verification,
   type Violation,
 } from "@cookmate/shared";
+import { lemmaKey, lookup, sameIngredient, violatesDietary } from "./resolve.js";
 
 /**
  * THE CONSTRAINT VERIFIER — the core of the product.
@@ -22,39 +23,38 @@ import {
  * responsible for anything a computer can check exactly.
  */
 
-/** Kitchen basics we assume without being told. Deliberately short. */
-const STAPLES = new Set([
+/**
+ * Kitchen basics we assume without being told, as canonical ids.
+ *
+ * Ids rather than strings so "extra virgin olive oil" and "olive oil" are the
+ * same staple without listing both.
+ */
+const STAPLE_IDS = new Set([
   "salt",
-  "sea salt",
-  "table salt",
-  "kosher salt",
-  "pepper",
-  "black pepper",
-  "white pepper",
+  "black_pepper",
   "water",
   "oil",
-  "cooking oil",
-  "vegetable oil",
-  "olive oil",
+  "olive_oil",
   "butter",
   "flour",
-  "plain flour",
-  "all-purpose flour",
   "sugar",
-  "white sugar",
 ]);
 
-/** Strip plurals, punctuation, and case so "Brown Onions" matches "onion". */
-function normalise(raw: string): string {
-  let s = raw.toLowerCase().trim();
-  s = s.replace(/[^a-z\s-]/g, " ");
-  s = s.replace(/\s+/g, " ").trim();
-  // Naive de-pluralisation is sufficient here and stays predictable.
-  if (s.endsWith("ies") && s.length > 4) s = `${s.slice(0, -3)}y`;
-  else if (s.endsWith("es") && s.length > 3 && /(sh|ch|s|x|z)es$/.test(s)) s = s.slice(0, -2);
-  else if (s.endsWith("s") && !s.endsWith("ss") && s.length > 3) s = s.slice(0, -1);
-  return s;
-}
+/** Retained for terms the taxonomy doesn't cover yet. */
+const STAPLE_LEXICAL = new Set([
+  "salt", "sea salt", "table salt", "kosher salt",
+  "pepper", "black pepper", "white pepper",
+  "water", "oil", "cooking oil", "vegetable oil", "olive oil",
+  "butter", "flour", "plain flour", "all-purpose flour",
+  "sugar", "white sugar",
+]);
+
+/**
+ * The canonical key for a name: punctuation stripped, case folded, every word
+ * lemmatised. Replaces the hand-rolled de-pluralisation that turned "tomatoes"
+ * into "tomatoe" and silently broke every tomato recipe.
+ */
+const normalise = lemmaKey;
 
 /** Tokens of the pantry entry, so "chicken thighs" also indexes "chicken", "thigh". */
 function expand(entry: string): string[] {
@@ -63,30 +63,54 @@ function expand(entry: string): string[] {
   return [norm, ...parts.map(normalise)];
 }
 
-function buildPantryIndex(pantry: string[]): Set<string> {
-  const index = new Set<string>();
-  for (const item of pantry) for (const form of expand(item)) index.add(form);
-  return index;
+export interface PantryIndex {
+  /** Canonical ids of pantry items the taxonomy recognised. */
+  ids: Set<string>;
+  /** Lemma forms, for items it didn't. */
+  lexical: Set<string>;
+}
+
+function buildPantryIndex(pantry: string[]): PantryIndex {
+  const ids = new Set<string>();
+  const lexical = new Set<string>();
+  for (const item of pantry) {
+    const entry = lookup(item);
+    if (entry) ids.add(entry.id);
+    for (const form of expand(item)) lexical.add(form);
+  }
+  return { ids, lexical };
 }
 
 /**
  * Independent recomputation of an ingredient's source. We never trust the
  * model's own `source` claim — we compare against it and flag disagreement.
+ *
+ * Canonical first: if both sides are in the taxonomy, this is id equality and
+ * cannot be fooled by plurals, synonyms or compound nouns. Only terms the
+ * taxonomy doesn't know fall through to the old lexical rules.
  */
 function resolveSource(
   ingredientName: string,
-  pantryIndex: Set<string>,
+  pantryIndex: PantryIndex,
 ): "pantry" | "staple" | "shopping" {
+  const entry = lookup(ingredientName);
+  if (entry) {
+    if (STAPLE_IDS.has(entry.id)) return "staple";
+    if (pantryIndex.ids.has(entry.id)) return "pantry";
+    // Known ingredient, definitively not in the pantry — no need to guess.
+    if (pantryIndex.ids.size > 0 || pantryIndex.lexical.size === 0) return "shopping";
+  }
+
   const norm = normalise(ingredientName);
-  if (STAPLES.has(norm)) return "staple";
-  if (pantryIndex.has(norm)) return "pantry";
+  if (STAPLE_LEXICAL.has(norm)) return "staple";
+  if (pantryIndex.lexical.has(norm)) return "pantry";
 
   // A multi-word ingredient counts as pantry only if its head noun is present:
   // "chicken thigh" matches a pantry with "chicken thighs", but "chicken stock"
   // must not match a pantry containing only "chicken".
   const words = norm.split(" ").filter((w) => w.length > 2);
   const head = words[words.length - 1];
-  if (words.length > 1 && head !== undefined && pantryIndex.has(head)) {
+  if (words.length > 1 && head !== undefined && pantryIndex.lexical.has(head)) {
     // Guard the classic false positives: a qualifier that changes the product.
     const PRODUCT_QUALIFIERS = ["stock", "broth", "milk", "sauce", "powder", "oil", "paste", "juice"];
     if (!PRODUCT_QUALIFIERS.includes(head)) return "pantry";
@@ -94,27 +118,21 @@ function resolveSource(
   return "shopping";
 }
 
-function containsAny(haystack: string, needles: string[]): string | null {
-  const norm = normalise(haystack);
-  for (const n of needles) {
-    const nn = normalise(n);
-    if (nn.length === 0) continue;
-    if (norm === nn || norm.includes(nn) || nn.includes(norm)) return n;
+/** Dislike matching: canonical identity first, then loose string overlap. */
+function matchesDislike(ingredientName: string, dislikes: string[]): string | null {
+  for (const dislike of dislikes) {
+    if (dislike.trim().length === 0) continue;
+    if (sameIngredient(ingredientName, dislike)) return dislike;
+    const a = normalise(ingredientName);
+    const b = normalise(dislike);
+    if (a.includes(b) || b.includes(a)) return dislike;
   }
   return null;
 }
 
-/** Ingredients that violate common dietary tags. Extend as real users hit gaps. */
-const DIETARY_FORBIDDEN: Record<string, string[]> = {
-  vegetarian: ["chicken", "beef", "pork", "lamb", "bacon", "ham", "fish", "salmon", "tuna", "prawn", "shrimp", "anchovy", "gelatin", "chicken stock", "beef stock", "fish sauce"],
-  vegan: ["chicken", "beef", "pork", "lamb", "bacon", "ham", "fish", "salmon", "tuna", "prawn", "shrimp", "anchovy", "gelatin", "chicken stock", "beef stock", "fish sauce", "milk", "butter", "cheese", "cream", "egg", "honey", "yoghurt", "yogurt"],
-  "dairy-free": ["milk", "butter", "cheese", "cream", "yoghurt", "yogurt", "parmesan", "mozzarella"],
-  "gluten-free": ["flour", "plain flour", "bread", "pasta", "soy sauce", "couscous", "barley", "breadcrumb"],
-  pescatarian: ["chicken", "beef", "pork", "lamb", "bacon", "ham", "chicken stock", "beef stock"],
-};
-
 export function verifyRecipe(recipe: Recipe, request: CookRequest): Verification {
   const violations: Violation[] = [];
+  const uncertain = new Set<string>();
   const pantryIndex = buildPantryIndex(request.pantry);
   const shoppingList: string[] = [];
   let pantryUsedCount = 0;
@@ -135,7 +153,7 @@ export function verifyRecipe(recipe: Recipe, request: CookRequest): Verification
       }
     }
 
-    const disliked = containsAny(ing.name, request.dislikes);
+    const disliked = matchesDislike(ing.name, request.dislikes);
     if (disliked !== null) {
       violations.push({
         kind: "disliked_ingredient",
@@ -145,15 +163,17 @@ export function verifyRecipe(recipe: Recipe, request: CookRequest): Verification
     }
 
     for (const tag of request.dietary) {
-      const forbidden = DIETARY_FORBIDDEN[normalise(tag)];
-      if (!forbidden) continue;
-      const hit = containsAny(ing.name, forbidden);
-      if (hit !== null) {
+      const verdict = violatesDietary(ing.name, tag);
+      if (verdict === true) {
         violations.push({
           kind: "dietary_conflict",
           detail: `"${ing.name}" is not ${tag}.`,
           subject: ing.name,
         });
+      } else if (verdict === null) {
+        // We don't know what this ingredient is, so we don't claim it's a
+        // problem. Surfaced as a question instead of asserted as a violation.
+        uncertain.add(ing.name);
       }
     }
   }
@@ -242,8 +262,9 @@ export function verifyRecipe(recipe: Recipe, request: CookRequest): Verification
     activeMinutes,
     passiveMinutes,
     equipmentUsed: [...equipmentUsed],
+    uncertain: [...uncertain],
   };
 }
 
 /** Exported for unit tests. */
-export const __testables = { normalise, resolveSource, buildPantryIndex };
+export const __testables = { normalise, resolveSource, buildPantryIndex, matchesDislike };
