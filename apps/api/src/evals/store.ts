@@ -54,6 +54,11 @@ CREATE INDEX IF NOT EXISTS idx_eval_fixture ON eval_runs(fixture_id);
 // Provenance, added after the first version of this table shipped.
 addColumnIfMissing("eval_runs", "fixture_set_hash", "TEXT");
 addColumnIfMissing("eval_runs", "git_sha", "TEXT");
+// The full verdict, not just the kinds. Diagnosing the first two eval failures
+// meant reading ingredient lists by hand because only `violation_kinds` was
+// stored — a verifier that explains itself is worth nothing if you drop the
+// explanation on the way to the database.
+addColumnIfMissing("eval_runs", "verification_json", "TEXT");
 
 /**
  * The commit the suite ran against.
@@ -110,10 +115,10 @@ export function recordRun(row: EvalRow): void {
     `INSERT INTO eval_runs (
        id, suite_id, fixture_id, repeat_index,
        model, effort, prompt_hash, fixture_set_hash, git_sha,
-       verification_ok, violation_count, violation_kinds, recipe_title, recipe_json, error_code,
+       verification_ok, violation_count, violation_kinds, verification_json, recipe_title, recipe_json, error_code,
        input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
        cache_status, cost_usd, latency_ms
-     ) VALUES (?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?, ?,?,?,?, ?,?,?)`,
+     ) VALUES (?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?, ?,?,?)`,
   ).run(
     row.id,
     row.suiteId,
@@ -127,6 +132,7 @@ export function recordRun(row: EvalRow): void {
     v ? (v.ok ? 1 : 0) : null,
     v ? v.violations.length : null,
     v ? [...new Set(v.violations.map((x) => x.kind))].sort().join(",") : null,
+    v ? JSON.stringify(v) : null,
     row.recipeTitle ?? null,
     row.recipeJson ?? null,
     row.errorCode ?? null,
@@ -217,6 +223,52 @@ export function summariseByFixture(suiteId?: string): FixtureSummary[] {
        ORDER BY passed * 1.0 / COUNT(*), fixture_id`,
     )
     .all(suiteId ?? null, suiteId ?? null) as FixtureSummary[];
+}
+
+export interface Unexpected {
+  fixture_id: string;
+  repeat_index: number;
+  expected_ok: number;
+  verification_ok: number | null;
+  error_code: string | null;
+  details: string | null;
+}
+
+/**
+ * Runs whose outcome disagreed with the fixture's expectation.
+ *
+ * a satisfiable fixture that failed is a defect somewhere, and the violation
+ * detail tells you in one line whether to look at the prompt or the verifier.
+ */
+export function unexpectedRuns(suiteId: string | undefined, expected: Map<string, boolean>): Unexpected[] {
+  const rows = db
+    .prepare(
+      `SELECT fixture_id, repeat_index, verification_ok, error_code, verification_json
+       FROM eval_runs WHERE (? IS NULL OR suite_id = ?) ORDER BY fixture_id, repeat_index`,
+    )
+    .all(suiteId ?? null, suiteId ?? null) as Array<{
+      fixture_id: string; repeat_index: number; verification_ok: number | null;
+      error_code: string | null; verification_json: string | null;
+    }>;
+
+  const out: Unexpected[] = [];
+  for (const r of rows) {
+    const want = expected.get(r.fixture_id);
+    if (want === undefined) continue;
+    const got = r.error_code === null && r.verification_ok === 1;
+    if (got === want) continue;
+    let details: string | null = null;
+    if (r.verification_json) {
+      const v = JSON.parse(r.verification_json) as { violations: Array<{ kind: string; detail: string }> };
+      details = v.violations.map((x) => `${x.kind}: ${x.detail}`).join(" | ");
+    }
+    out.push({
+      fixture_id: r.fixture_id, repeat_index: r.repeat_index,
+      expected_ok: want ? 1 : 0, verification_ok: r.verification_ok,
+      error_code: r.error_code, details,
+    });
+  }
+  return out;
 }
 
 export function latestSuiteId(): string | undefined {
