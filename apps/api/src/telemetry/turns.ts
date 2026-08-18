@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { CookRequest, Recipe, Verification } from "@cookmate/shared";
 import { db } from "../db/index.js";
 import type { CallUsage } from "../llm/models.js";
+import type { ErrorInfo } from "../llm/errors.js";
 
 /**
  * Turn logging.
@@ -38,6 +39,8 @@ export function openTurn(userId: string, request: CookRequest): string {
 export interface TurnCompletion extends CallUsage {
   recipe: Recipe;
   verification: Verification;
+  /** 1 normally, 2 when the repair loop ran. */
+  attempts: number;
 }
 
 export function completeTurn(turnId: string, result: TurnCompletion): void {
@@ -47,7 +50,7 @@ export function completeTurn(turnId: string, result: TurnCompletion): void {
        verification_ok = ?, violation_count = ?,
        model = ?, reasoning_effort = ?, input_tokens = ?, output_tokens = ?,
        cache_read_tokens = ?, cache_write_tokens = ?, cache_status = ?,
-       cost_usd = ?, latency_ms = ?
+       cost_usd = ?, latency_ms = ?, attempts = ?
      WHERE id = ?`,
   ).run(
     JSON.stringify(result.recipe),
@@ -64,8 +67,9 @@ export function completeTurn(turnId: string, result: TurnCompletion): void {
     result.cacheStatus,
     result.costUsd,
     result.latencyMs,
+    result.attempts,
     turnId,
-  );  
+  );
 }
 
 /**
@@ -79,21 +83,26 @@ export function completeTurn(turnId: string, result: TurnCompletion): void {
  * absent only when the stream never completed at all — a network error or a
  * client abort — where nothing was reported to bill.
  */
-export function failTurn(turnId: string, code: string, usage?: CallUsage): void {
+export function failTurn(turnId: string, error: ErrorInfo, usage?: CallUsage): void {
+  const code = error.code;
   if (!usage) {
-    db.prepare(`UPDATE turns SET error_code = ? WHERE id = ?`).run(code, turnId);
+    db.prepare(
+      `UPDATE turns SET error_code = ?, error_message = ?, error_retryable = ? WHERE id = ?`,
+    ).run(code, error.message, error.retryable ? 1 : 0, turnId);
     return;
   }
 
   db.prepare(
     `UPDATE turns SET
-       error_code = ?,
+       error_code = ?, error_message = ?, error_retryable = ?,
        model = ?, reasoning_effort = ?, input_tokens = ?, output_tokens = ?,
        cache_read_tokens = ?, cache_write_tokens = ?, cache_status = ?,
        cost_usd = ?, latency_ms = ?
      WHERE id = ?`,
   ).run(
     code,
+    error.message,
+    error.retryable ? 1 : 0,
     usage.model,
     usage.effort,
     usage.inputTokens,
