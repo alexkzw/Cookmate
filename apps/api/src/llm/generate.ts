@@ -71,6 +71,13 @@ export async function streamRecipe(
   request: CookRequest,
   onTextDelta: (text: string) => void,
   signal?: AbortSignal,
+  /**
+   * Replaces the rendered user turn. Used by the repair loop, which needs to
+   * send the original request PLUS the verifier's findings — and must do so
+   * after the cache breakpoint, so the system prompt stays byte-identical and
+   * the retry reads the cached prefix instead of writing a new one.
+   */
+  userTurnOverride?: string,
 ): Promise<GenerationResult> {
   const startedAt = Date.now();
   const model = config.RECIPE_MODEL;
@@ -92,7 +99,7 @@ export async function streamRecipe(
         effort: config.RECIPE_EFFORT,
         format: zodOutputFormat(RecipeSchema),
       },
-      messages: [{ role: "user", content: buildUserTurn(request) }],
+      messages: [{ role: "user", content: userTurnOverride ?? buildUserTurn(request) }],
     },
     { signal },
   );
