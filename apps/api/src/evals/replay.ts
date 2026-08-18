@@ -3,7 +3,7 @@ import type { Recipe } from "@cookmate/shared";
 import { db } from "../db/index.js";
 import { verifyRecipe } from "../verify/constraints.js";
 import { FIXTURES, fixtureSetHash } from "./fixtures.js";
-import { recordRun } from "./store.js";
+import { recordRun, findExistingReplay } from "./store.js";
 
 /**
  * RE-SCORING, as distinct from re-generating.
@@ -56,6 +56,7 @@ interface SourceRow {
   verification_ok: number | null;
   violation_kinds: string | null;
   fixture_set_hash: string | null;
+  prompt_hash: string;
   model: string;
   effort: string;
   input_tokens: number | null;
@@ -79,11 +80,41 @@ export function latestScorableSuite(): string | undefined {
   return row?.suite_id;
 }
 
-export function replaySuite(sourceSuiteId: string): ReplayResult {
+/** Thrown when the identical replay already exists. Carries the existing suite. */
+export class DuplicateReplayError extends Error {
+  constructor(
+    readonly sourceSuiteId: string,
+    readonly existingSuiteId: string,
+    readonly existingCreatedAt: string,
+    readonly rows: number,
+  ) {
+    super(
+      `Suite ${sourceSuiteId} has already been re-scored by this exact verifier ` +
+        `and fixture set: suite ${existingSuiteId} (${rows} rows, ${existingCreatedAt}).`,
+    );
+    this.name = "DuplicateReplayError";
+  }
+}
+
+export function replaySuite(sourceSuiteId: string, force = false): ReplayResult {
+  // Re-scoring is deterministic, so an identical replay produces identical
+  // verdicts and only inflates the apparent sample size. Refuse by default.
+  if (!force) {
+    const existing = findExistingReplay(sourceSuiteId, fixtureSetHash());
+    if (existing) {
+      throw new DuplicateReplayError(
+        sourceSuiteId,
+        existing.suite_id,
+        existing.created_at,
+        existing.n,
+      );
+    }
+  }
+
   const rows = db
     .prepare(
       `SELECT fixture_id, repeat_index, recipe_json, recipe_title, verification_ok,
-              violation_kinds, fixture_set_hash, model, effort,
+              violation_kinds, fixture_set_hash, prompt_hash, model, effort,
               input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
               cache_status, cost_usd, latency_ms
        FROM eval_runs
@@ -143,6 +174,8 @@ export function replaySuite(sourceSuiteId: string): ReplayResult {
       recipeTitle: row.recipe_title ?? undefined,
       recipeJson: row.recipe_json,
       replayedFrom: sourceSuiteId,
+      // The prompt that produced this recipe, not today's.
+      promptHashOverride: row.prompt_hash,
       // Generation cost is carried over unchanged. The re-scoring was free, but
       // this row still represents a recipe that cost that much to produce — and
       // "cost per passing recipe" is the number a routing decision turns on.

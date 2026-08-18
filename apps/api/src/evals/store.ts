@@ -114,6 +114,13 @@ export interface EvalRow {
   fixtureSetHash: string;
   /** Source suite id when this row was re-scored rather than generated. */
   replayedFrom?: string;
+  /**
+   * Overrides the current prompt hash. Only replays set this: the prompt is a
+   * property of GENERATION, and a replay didn't generate anything — so it must
+   * carry the hash of the prompt that actually produced the recipe, not
+   * whatever SYSTEM_PROMPT happens to say today.
+   */
+  promptHashOverride?: string;
 }
 
 export function recordRun(row: EvalRow): void {
@@ -133,7 +140,7 @@ export function recordRun(row: EvalRow): void {
     row.repeatIndex,
     row.usage?.model ?? row.model ?? "unknown",
     row.usage?.effort ?? row.effort ?? "unknown",
-    promptHash(),
+    row.promptHashOverride ?? promptHash(),
     row.fixtureSetHash,
     GIT_SHA,
     row.replayedFrom ?? null,
@@ -277,6 +284,39 @@ export function unexpectedRuns(suiteId: string | undefined, expected: Map<string
     });
   }
   return out;
+}
+
+export const CURRENT_GIT_SHA = GIT_SHA;
+
+/**
+ * Has this exact replay already been recorded?
+ *
+ * Re-scoring is deterministic: same recipes, same verifier, same fixtures gives
+ * bit-identical verdicts. A second replay therefore adds no information and
+ * actively harms the analysis, because `summariseByCondition` groups on these
+ * very columns — two replays of one suite would merge into a single row showing
+ * double the n, overstating a sample that never grew.
+ *
+ * Note the asymmetry with generation, which is deliberately NOT guarded:
+ * generation is stochastic, so running it again is a legitimate way to collect
+ * more samples. Guard idempotency where the operation is deterministic; allow
+ * repetition where it is stochastic.
+ */
+export function findExistingReplay(
+  sourceSuiteId: string,
+  fixtureSetHash: string,
+): { suite_id: string; created_at: string; n: number } | undefined {
+  return db
+    .prepare(
+      `SELECT suite_id, MIN(created_at) AS created_at, COUNT(*) AS n
+       FROM eval_runs
+       WHERE replayed_from = ? AND git_sha = ? AND fixture_set_hash = ?
+       GROUP BY suite_id
+       ORDER BY created_at DESC LIMIT 1`,
+    )
+    .get(sourceSuiteId, GIT_SHA, fixtureSetHash) as
+    | { suite_id: string; created_at: string; n: number }
+    | undefined;
 }
 
 export function latestSuiteId(): string | undefined {

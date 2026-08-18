@@ -1,7 +1,7 @@
 import { config } from "../config.js";
 import { getFixtures, fixtureSetHash, FIXTURES } from "./fixtures.js";
 import { runSuite } from "./runner.js";
-import { replaySuite, latestScorableSuite } from "./replay.js";
+import { replaySuite, latestScorableSuite, DuplicateReplayError } from "./replay.js";
 import {
   summariseByCondition,
   summariseByFixture,
@@ -19,6 +19,7 @@ import {
  *   pnpm eval --only tight-time        just one case
  *   pnpm eval --replay                 re-score the last suite's stored recipes
  *   pnpm eval --replay <suiteId>       re-score a specific suite
+ *   pnpm eval --replay --force         re-score even if an identical replay exists
  *   pnpm eval --report                 print the last suite, spend nothing
  *   pnpm eval --report --all           print every run ever recorded
  *   pnpm eval --yes                    skip the cost confirmation
@@ -94,7 +95,19 @@ async function main(): Promise<void> {
     const source = value("replay") ?? latestScorableSuite();
     if (!source) throw new Error("No suite with stored recipes to re-score.");
 
-    const r = replaySuite(source);
+    let r;
+    try {
+      r = replaySuite(source, flag("force"));
+    } catch (err) {
+      if (err instanceof DuplicateReplayError) {
+        console.log(`\n${err.message}`);
+        console.log(`Nothing re-scored — the result would be byte-identical.\n`);
+        console.log(`  see it:    pnpm eval --report ${err.existingSuiteId}`);
+        console.log(`  override:  pnpm eval --replay ${source} --force\n`);
+        return;
+      }
+      throw err;
+    }
     console.log(
       `\nre-scored ${r.scored} stored recipes from suite ${r.sourceSuiteId} ` +
         `-> new suite ${r.suiteId}\n` +
