@@ -80,6 +80,12 @@ export const StatsSchema = z
     avgLatencyMs: z.number(),
     totalCostUsd: z.number(),
     cacheHitRate: z.number(),
+    /**
+     * Requests refused by admission control in the last 24h, by reason.
+     * A cap that fires constantly is set wrong; a cap that has never fired is
+     * unproven. Neither is visible if a 429 only ever reaches one browser.
+     */
+    limitEvents: z.array(z.object({ reason: z.string(), hits: z.number() })),
     weekly: z.array(z.object({ week: z.string(), turns: z.number() })),
   })
   .strict();
