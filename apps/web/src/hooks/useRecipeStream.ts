@@ -108,7 +108,17 @@ export function useRecipeStream() {
       });
 
       if (!res.ok || !res.body) {
-        const detail = await res.text().catch(() => "");
+        // Rejections carry a JSON body — `{ error, code }` for a 429 from
+        // admission control, `{ error, issues }` for a 400. Surfacing the raw
+        // text would show a user the serialised object.
+        const raw = await res.text().catch(() => "");
+        let detail = raw;
+        try {
+          const parsed = JSON.parse(raw) as { error?: string };
+          if (parsed.error) detail = parsed.error;
+        } catch {
+          // Not JSON. Fall through to the raw text.
+        }
         throw new Error(detail || `Request failed (${res.status})`);
       }
 
