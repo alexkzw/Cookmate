@@ -104,6 +104,15 @@ addColumnIfMissing("turns", "cookware_json", "TEXT");
 // above, which is the *cook's* effort preference (minimal | moderate | project).
 // Without this, a model/effort sweep can't attribute a result to its condition.
 addColumnIfMissing("turns", "reasoning_effort", "TEXT");
+// Why a turn failed, not just that it did. See llm/errors.ts.
+addColumnIfMissing("turns", "error_message", "TEXT");
+addColumnIfMissing("turns", "error_retryable", "INTEGER");
+// Prompt provenance in product telemetry, matching what eval_runs already
+// records — otherwise a quality change can't be attributed to a prompt edit.
+addColumnIfMissing("turns", "prompt_hash", "TEXT");
+// 2 when the repair loop ran. Lets /api/stats separate "right first time" from
+// "rescued", which a single pass rate cannot.
+addColumnIfMissing("turns", "attempts", "INTEGER");
 
 export function upsertUser(id: string, email: string | null, displayName: string | null): void {
   db.prepare(
