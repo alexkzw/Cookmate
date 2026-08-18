@@ -8,7 +8,10 @@ import { PantryPanel } from "./PantryPanel";
 
 export function Chat({ showUsage }: { showUsage: boolean }) {
   const { state, start } = useRecipeStream();
-  const busy = state.phase === "generating" || state.phase === "verifying";
+  const busy =
+    state.phase === "generating" ||
+    state.phase === "repairing" ||
+    state.phase === "verifying";
   const hasResult = state.recipe !== null;
 
   function onSubmit(req: CookRequestInput) {
@@ -49,6 +52,20 @@ export function Chat({ showUsage }: { showUsage: boolean }) {
                 {state.preview.ingredientCount === 1 ? "" : "s"} so far…
               </p>
             )}
+          </div>
+        )}
+
+        {state.phase === "repairing" && state.repairing && (
+          <div className="rounded-xl bg-amber-50 p-4 text-sm text-amber-900 ring-1 ring-amber-200">
+            <p className="flex items-center gap-2 font-medium">
+              <Sparkles className="h-4 w-4 animate-shimmer" />
+              That one didn't check out — asking for a fix…
+            </p>
+            <ul className="mt-2 space-y-1 pl-1">
+              {state.repairing.map((issue, i) => (
+                <li key={i}>· {issue}</li>
+              ))}
+            </ul>
           </div>
         )}
 

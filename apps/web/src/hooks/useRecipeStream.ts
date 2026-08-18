@@ -22,7 +22,7 @@ export type CookRequestInput = Omit<
  * ReadableStream — about twenty lines, and it gives us abort support for free.
  */
 
-export type Phase = "idle" | "generating" | "verifying" | "done" | "error";
+export type Phase = "idle" | "generating" | "repairing" | "verifying" | "done" | "error";
 
 export interface Usage {
   inputTokens: number;
@@ -42,6 +42,13 @@ export interface StreamState {
   preview: { title: string | null; summary: string | null; ingredientCount: number };
   recipe: Recipe | null;
   verification: Verification | null;
+  /**
+   * Problems the verifier found on the first attempt, while the model is being
+   * asked to fix them. Surfaced rather than hidden: the retry is part of what
+   * the product does, and pretending the first answer never happened would be
+   * the same dishonesty as hiding the verification step.
+   */
+  repairing: string[] | null;
   usage: Usage | null;
   error: string | null;
 }
@@ -52,6 +59,7 @@ const EMPTY: StreamState = {
   preview: { title: null, summary: null, ingredientCount: 0 },
   recipe: null,
   verification: null,
+  repairing: null,
   usage: null,
   error: null,
 };
@@ -137,8 +145,11 @@ export function useRecipeStream() {
               jsonBuffer += event.text;
               setState((s) => ({ ...s, preview: scrapePreview(jsonBuffer) }));
               break;
+            case "repairing":
+              setState((s) => ({ ...s, phase: "repairing", repairing: event.issues }));
+              break;
             case "recipe":
-              setState((s) => ({ ...s, recipe: event.recipe, phase: "verifying" }));
+              setState((s) => ({ ...s, recipe: event.recipe, phase: "verifying", repairing: null }));
               break;
             case "verification":
               setState((s) => ({ ...s, verification: event.verification }));
