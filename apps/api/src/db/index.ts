@@ -113,6 +113,12 @@ addColumnIfMissing("turns", "prompt_hash", "TEXT");
 // 2 when the repair loop ran. Lets /api/stats separate "right first time" from
 // "rescued", which a single pass rate cannot.
 addColumnIfMissing("turns", "attempts", "INTEGER");
+// The first attempt's verdict, kept even when repair fixed it. `verification_json`
+// holds the FINAL verdict, so on a repaired turn it records a pass and the defect
+// that triggered the repair is gone. These two columns are where a production
+// failure mode stays visible after the loop has quietly cleaned it up.
+addColumnIfMissing("turns", "first_pass_ok", "INTEGER");
+addColumnIfMissing("turns", "first_pass_verification_json", "TEXT");
 
 export function upsertUser(id: string, email: string | null, displayName: string | null): void {
   db.prepare(

@@ -3,7 +3,7 @@ import { generateVerifiedRecipe } from "../llm/verified.js";
 import { classifyError } from "../llm/errors.js";
 import { config } from "../config.js";
 import { RecipeGenerationError } from "../llm/generate.js";
-import { recordRun, promptHash } from "./store.js";
+import { recordRun, promptHash, SCORER_HASH } from "./store.js";
 import { fixtureSetHash, type Fixture } from "./fixtures.js";
 
 /**
@@ -51,7 +51,8 @@ export async function runSuite(opts: SuiteOptions): Promise<SuiteResult> {
   log(
     `suite ${suiteId} · ${opts.fixtures.length} fixtures × ${opts.repeats} ` +
       `= ${total} runs · ${config.RECIPE_MODEL} / ${config.RECIPE_EFFORT} · ` +
-      `prompt ${promptHash()} · fixtures ${setHash}`,
+      `repair ${opts.repair ? "on" : "off"} · ` +
+      `prompt ${promptHash()} · fixtures ${setHash} · scorer ${SCORER_HASH}`,
   );
 
   for (const fixture of opts.fixtures) {
@@ -82,6 +83,8 @@ export async function runSuite(opts: SuiteOptions): Promise<SuiteResult> {
           attempts: result.attempts,
           firstPassOk: result.firstPassOk,
           firstPassKinds: result.firstPassKinds.join(","),
+          firstPassVerification: result.firstPassVerification,
+          repair: opts.repair ?? false,
         });
 
         const repaired = result.attempts > 1 ? ` (repaired from ${result.firstPassKinds.join(",")})` : "";
@@ -111,6 +114,7 @@ export async function runSuite(opts: SuiteOptions): Promise<SuiteResult> {
           error: info,
           model: config.RECIPE_MODEL,
           effort: config.RECIPE_EFFORT,
+          repair: opts.repair ?? false,
         });
 
         log(`${label}  ERROR ${info.code}${info.retryable ? " (retryable)" : ""}: ${info.message}`);

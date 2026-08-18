@@ -33,6 +33,15 @@ export interface VerifiedGeneration {
   firstPassOk: boolean;
   /** Violation kinds from the first attempt, even if repair later fixed them. */
   firstPassKinds: string[];
+  /**
+   * The first attempt's FULL verdict. `verification` above is the final one,
+   * which after a successful repair is a pass — so this is the only place the
+   * defect that triggered the repair survives. Kinds alone tell you the model
+   * got the arithmetic wrong; the detail tells you it claimed 28 minutes over
+   * steps totalling 41, which is the difference between knowing a category and
+   * being able to fix it.
+   */
+  firstPassVerification: Verification;
 }
 
 /** Sum two calls into one turn-level total. Rates differ per model, so costs add. */
@@ -74,6 +83,7 @@ export async function generateVerifiedRecipe(
       attempts: 1,
       firstPassOk: firstVerification.ok,
       firstPassKinds,
+      firstPassVerification: firstVerification,
     };
   }
 
@@ -96,5 +106,6 @@ export async function generateVerifiedRecipe(
     attempts: 2,
     firstPassOk: false,
     firstPassKinds,
+    firstPassVerification: firstVerification,
   };
 }

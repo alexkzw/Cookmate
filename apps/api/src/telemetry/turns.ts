@@ -41,6 +41,10 @@ export interface TurnCompletion extends CallUsage {
   verification: Verification;
   /** 1 normally, 2 when the repair loop ran. */
   attempts: number;
+  /** Did the first attempt pass? The number the repair loop is judged on. */
+  firstPassOk: boolean;
+  /** The first attempt's full verdict — the only record of what repair fixed. */
+  firstPassVerification: Verification;
 }
 
 export function completeTurn(turnId: string, result: TurnCompletion): void {
@@ -50,7 +54,8 @@ export function completeTurn(turnId: string, result: TurnCompletion): void {
        verification_ok = ?, violation_count = ?,
        model = ?, reasoning_effort = ?, input_tokens = ?, output_tokens = ?,
        cache_read_tokens = ?, cache_write_tokens = ?, cache_status = ?,
-       cost_usd = ?, latency_ms = ?, attempts = ?
+       cost_usd = ?, latency_ms = ?, attempts = ?,
+       first_pass_ok = ?, first_pass_verification_json = ?
      WHERE id = ?`,
   ).run(
     JSON.stringify(result.recipe),
@@ -68,6 +73,8 @@ export function completeTurn(turnId: string, result: TurnCompletion): void {
     result.costUsd,
     result.latencyMs,
     result.attempts,
+    result.firstPassOk ? 1 : 0,
+    JSON.stringify(result.firstPassVerification),
     turnId,
   );
 }

@@ -70,7 +70,7 @@ chatRoutes.post("/stream", requireAuth, async (c) => {
     await send({ type: "start", turnId });
 
     try {
-      const { recipe, usage, verification, attempts } =
+      const { recipe, usage, verification, attempts, firstPassOk, firstPassVerification } =
         await generateVerifiedRecipe(
           request,
           (text) => {
@@ -89,7 +89,14 @@ chatRoutes.post("/stream", requireAuth, async (c) => {
       await send({ type: "recipe", recipe });
       await send({ type: "verification", verification });
 
-      completeTurn(turnId, { recipe, verification, ...usage, attempts });
+      completeTurn(turnId, {
+        recipe,
+        verification,
+        ...usage,
+        attempts,
+        firstPassOk,
+        firstPassVerification,
+      });
 
       await send({
         type: "done",

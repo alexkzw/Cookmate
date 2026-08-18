@@ -134,19 +134,73 @@ dates, no user IDs, no request data interpolated in. Everything volatile goes in
 `buildUserTurn()`, which renders after the cache breakpoint. One `new Date()` in
 the system prompt silently destroys caching with no error.
 
-Measured on a real pair of calls: cache MISS → HIT dropped cost from **$0.0591
-to $0.0324 (45%)** and latency from **20.3s to 13.8s**.
+Measured across all three cache states on Opus (prefix 3,472 tokens, user turn
+155). **Input-side cost**: `NONE` $0.01814 → `MISS` $0.02248 (24% *worse*) →
+`HIT` $0.00251 (86% less). Total turn cost `MISS` $0.0778 → `HIT` $0.0587.
+
+Three things this measurement taught, all worth preserving:
+
+1. **Caching reclassifies tokens, it doesn't reduce them.** `input_tokens +
+   cache_read + cache_write` is conserved at 3,627 in every state.
+2. **A miss costs 24% more than not caching**, so break-even is a **~22% hit
+   rate**. Caching is a bet on locality, not a free win.
+3. **Compare input-side cost, never the total.** Output is ~96% of a warm turn
+   and swings 21% run to run. An earlier version of this note claimed 45% cost
+   and 32% latency savings — both were output-length variance misattributed to
+   caching. No latency win was reproducible (28.1s cold vs 28.5s warm).
 
 **Model choice is config, not code.** `RECIPE_MODEL` and `RECIPE_EFFORT` are env
-vars. Default is `claude-opus-5` at `medium`. Switching to `claude-sonnet-5` is
-~40% cheaper — but **measure on an eval set before switching**, don't assume.
-Effort is a *separate* cost axis from model choice; sweep it before downgrading
-the tier.
+vars. Default is **`claude-sonnet-5` at `medium`**, changed from Opus on eval
+evidence rather than on price alone. Effort is a *separate* cost axis from model
+choice; sweep it before downgrading the tier.
+
+The three-arm result that justified the switch (12 fixtures × 3, same prompt,
+same fixtures, byte-identical verifier):
+
+| arm | first pass | final | $/passing recipe | avg | max |
+|---|---|---|---|---|---|
+| sonnet + repair | 29/36 | **36/36** | **$0.0463** | 26.1s | 46.1s |
+| sonnet, no repair | 26/36 | 26/36 | $0.0521 | 23.5s | 51.5s |
+| opus, no repair | 36/36 | 36/36 | $0.0561 | 26.1s | 38.6s |
+
+**The repair loop is what made the downgrade safe**, and the ordering matters:
+bare Sonnet was cheaper per *call* but more expensive per *passing recipe*, so
+switching on price alone would have bought worse output for more money. Opus
+still wins on tail latency (38.6s vs 46.1s), because repair fires on ~19% of
+Sonnet requests and roughly doubles those.
+
+**Verification is a controller, not a reporter.** `llm/verified.ts` feeds the
+verifier's findings back to the model and retries **once**, bounded — each
+attempt is real money and ~25s of someone's evening, and a defect that survives
+a precise itemised description won't yield to a third try. The better of the two
+attempts wins, so repair improves the odds without ever suppressing a verdict.
+
+**Measure first-pass rate, never just pass rate.** With repair on, the final
+pass rate approaches 100% by construction: a model that never fails and a model
+rescued every time both report the same number. `first_pass_ok` and
+`first_pass_verification_json` are stored on both `eval_runs` and `turns` so the
+gap stays visible — and so does *what* repair fixed, since the final verdict on
+a repaired run is a pass and would otherwise be the only record.
+
+**Hash the scorer, not the commit.** Eval rows carry `prompt_hash`,
+`fixture_set_hash` and `scorer_hash` — a content hash of `verify/*.ts` plus the
+ingredient taxonomy. `git_sha` used to do this job and over-fired: the three-arm
+table above spans two commits whose diff never touched the verifier, so the
+commit key split one valid comparison into two rows. **A provenance key should
+hash the thing that computes the metric.** git_sha is still recorded, for
+finding the commit; it no longer gates anything. Rows predating the column fall
+back to `git:<sha>` rather than being merged — over-splitting is the safe
+direction to fail.
 
 **Migrations.** `db/index.ts` uses `CREATE TABLE IF NOT EXISTS` plus a small
 `addColumnIfMissing()` helper for forward-only column additions, so an existing
 dev database upgrades in place. Verified against a pre-cookware DB with data —
-all rows survived.
+all rows survived. Backfills live next to the column they fill and must be
+idempotent; `eval_runs.repair` is derived from `first_pass_ok IS NOT NULL`
+because the two shipped together. `scorer_hash` is deliberately **not**
+backfilled — some of those rows were graded by the pre-taxonomy verifier, and
+stamping today's hash on them would turn a gap in the record into a false claim
+about it.
 
 ---
 
@@ -166,8 +220,12 @@ Regression tests cover both halves.
 
 **Done:** streaming chat, structured recipe output, deterministic verification
 (ingredients, time, dislikes, dietary, servings, **cookware**), **active vs
-passive time**, pantry + preferences + cookware, turn telemetry with cost and
-cache status, `/api/stats`, Google OAuth via Supabase, cost/cache debug strip.
+passive time**, canonical ingredient taxonomy + lemmatiser, pantry + preferences
++ cookware, turn telemetry with cost and cache status, `/api/stats` (including
+first-pass and repair rates), Google OAuth via Supabase, cost/cache debug strip,
+**error classification** (`llm/errors.ts`, secrets scrubbed before persisting),
+**the repair loop**, and the **eval harness** — 12 fixtures, replay/re-score,
+provenance hashes, three measured arms.
 
 **Next up, in the order they were prioritised:**
 
@@ -185,8 +243,6 @@ cache status, `/api/stats`, Google OAuth via Supabase, cost/cache debug strip.
    place where escalating to Opus 5 at high effort actually earns its cost.
 5. **MCP server** — expose `get_pantry` / `suggest_recipe` /
    `add_to_shopping_list`. Can import these same Zod schemas.
-6. **Eval harness** — fixed set of (pantry, cookware, constraints) cases,
-   asserting the verifier passes. Then the model/effort sweep has real numbers.
 
 Deliberately **not** doing: real-time supermarket stock checking (no reliable
 API; substitutions + a shopping list serve the same need), quantity-aware pantry

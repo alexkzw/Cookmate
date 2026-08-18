@@ -54,11 +54,25 @@ statsRoutes.get("/", (c) => {
 
   // Pass rate and cache hit rate are computed over completed turns only —
   // counting failures as verification failures would conflate two problems.
-  const quality = one<{ completed: number; passed: number; cache_hits: number }>(`
+  const quality = one<{
+    completed: number;
+    passed: number;
+    cache_hits: number;
+    scored: number;
+    first_pass: number;
+    repaired: number;
+  }>(`
     SELECT
       COUNT(*)                                     AS completed,
       COALESCE(SUM(verification_ok = 1), 0)        AS passed,
-      COALESCE(SUM(cache_status IN ('HIT','PARTIAL')), 0) AS cache_hits
+      COALESCE(SUM(cache_status IN ('HIT','PARTIAL')), 0) AS cache_hits,
+      -- Repair rates get their own denominator on purpose. attempts is null
+      -- for every turn recorded before the loop existed, and folding those into
+      -- the divisor would report a falling repair rate that is really just old
+      -- data — the classic way a backfilled column lies.
+      COALESCE(SUM(attempts IS NOT NULL), 0)       AS scored,
+      COALESCE(SUM(attempts = 1 AND verification_ok = 1), 0) AS first_pass,
+      COALESCE(SUM(attempts > 1), 0)               AS repaired
     FROM turns
     WHERE recipe_json IS NOT NULL
   `);
@@ -83,6 +97,8 @@ statsRoutes.get("/", (c) => {
     thumbsUp: totals.up,
     thumbsDown: totals.down,
     verificationPassRate: quality.completed > 0 ? quality.passed / quality.completed : 0,
+    firstPassRate: quality.scored > 0 ? quality.first_pass / quality.scored : 0,
+    repairRate: quality.scored > 0 ? quality.repaired / quality.scored : 0,
     avgLatencyMs: Math.round(totals.latency ?? 0),
     totalCostUsd: Number((totals.cost ?? 0).toFixed(4)),
     cacheHitRate: quality.completed > 0 ? quality.cache_hits / quality.completed : 0,

@@ -28,6 +28,12 @@ import { recordRun, findExistingReplay } from "./store.js";
  * Replay the same suite five times and you get five identical results, because
  * the generations are fixed. `replayed_from` records the provenance so a replay
  * can never be mistaken for an independent run.
+ *
+ * ONE THING A REPLAY CANNOT RECOMPUTE: `first_pass_ok`. Only the winning recipe
+ * is stored, so on a repaired run the first attempt's recipe is gone and its
+ * verdict can't be re-derived under a new verifier. Replayed rows therefore
+ * leave the repair columns null and `summariseRepair` filters them out, rather
+ * than reporting a first-pass rate it would be guessing at.
  */
 
 export interface ReplayChange {
@@ -66,6 +72,7 @@ interface SourceRow {
   cache_status: string | null;
   cost_usd: number | null;
   latency_ms: number | null;
+  repair: number | null;
 }
 
 /** Newest suite that actually stored recipes, when none is named. */
@@ -116,7 +123,7 @@ export function replaySuite(sourceSuiteId: string, force = false): ReplayResult 
       `SELECT fixture_id, repeat_index, recipe_json, recipe_title, verification_ok,
               violation_kinds, fixture_set_hash, prompt_hash, model, effort,
               input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-              cache_status, cost_usd, latency_ms
+              cache_status, cost_usd, latency_ms, repair
        FROM eval_runs
        WHERE suite_id = ? AND recipe_json IS NOT NULL
        ORDER BY fixture_id, repeat_index`,
@@ -176,6 +183,11 @@ export function replaySuite(sourceSuiteId: string, force = false): ReplayResult 
       replayedFrom: sourceSuiteId,
       // The prompt that produced this recipe, not today's.
       promptHashOverride: row.prompt_hash,
+      // Same reasoning: whether the repair loop ran is a property of the
+      // GENERATION, so it carries over. Re-scoring can't repair anything — it
+      // has no model to ask — and a replay that reported `repair: off` would
+      // silently move a rescued recipe into the wrong arm.
+      repair: row.repair === null ? undefined : row.repair === 1,
       // Generation cost is carried over unchanged. The re-scoring was free, but
       // this row still represents a recipe that cost that much to produce — and
       // "cost per passing recipe" is the number a routing decision turns on.

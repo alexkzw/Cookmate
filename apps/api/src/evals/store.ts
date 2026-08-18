@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { db, addColumnIfMissing } from "../db/index.js";
 import { SYSTEM_PROMPT } from "../llm/prompts.js";
 import type { Verification } from "@cookmate/shared";
@@ -78,6 +81,43 @@ addColumnIfMissing("eval_runs", "error_retryable", "INTEGER");
 addColumnIfMissing("eval_runs", "attempts", "INTEGER");
 addColumnIfMissing("eval_runs", "first_pass_ok", "INTEGER");
 addColumnIfMissing("eval_runs", "first_pass_kinds", "TEXT");
+// The first attempt's FULL verdict, not just its kinds. `verification_json`
+// holds the final verdict, which for a repaired run is the passing one — so
+// without this the exact defect repair fixed ("steps total 41 min, recipe
+// claims 28") was computed, shown to the model, and then dropped on the floor.
+addColumnIfMissing("eval_runs", "first_pass_verification_json", "TEXT");
+// Whether the repair loop was ENABLED for this run. Part of the condition, not
+// of the result: "sonnet + repair" and "sonnet alone" are two different arms,
+// and without this column they group together and their pass rates average
+// into a number that describes neither.
+addColumnIfMissing("eval_runs", "repair", "INTEGER");
+// A content hash of the scorer itself — see scorerHash() below.
+addColumnIfMissing("eval_runs", "scorer_hash", "TEXT");
+
+/**
+ * Backfill `repair` for rows recorded before the column existed.
+ *
+ * Safe to derive, because `first_pass_ok` and the repair loop shipped in the
+ * same commit: a row that has one was produced by a runner that had the other.
+ * A row without it ran when repair did not exist, which is repair off — not
+ * unknown. Idempotent, so it is a no-op on every boot after the first.
+ *
+ * Deliberately NOT backfilling `scorer_hash`. Some of those rows were graded by
+ * the pre-taxonomy verifier, and stamping today's hash on them would assert
+ * they were scored by code they never met — turning a gap in the record into a
+ * false claim about it, which is the worse of the two. They keep a null hash
+ * and fall back to the commit for grouping; see summariseByCondition.
+ */
+db.exec(`
+  UPDATE eval_runs
+     SET repair = CASE WHEN first_pass_ok IS NOT NULL THEN 1 ELSE 0 END
+   WHERE repair IS NULL AND replayed_from IS NULL;
+
+  UPDATE eval_runs
+     SET repair = (SELECT src.repair FROM eval_runs src
+                    WHERE src.suite_id = eval_runs.replayed_from LIMIT 1)
+   WHERE repair IS NULL AND replayed_from IS NOT NULL;
+`);
 
 /**
  * The commit the suite ran against.
@@ -98,6 +138,52 @@ function gitSha(): string {
 }
 
 const GIT_SHA = gitSha();
+
+/**
+ * A content hash of the SCORER — the code that decides whether a recipe passed.
+ *
+ * `git_sha` was doing this job and doing it badly. It answers "which commit"
+ * when the question is "which scorer", and those come apart constantly: the
+ * three-arm comparison in the README ran across two commits whose diff touched
+ * only the repair loop and the eval harness, never the verifier. git_sha
+ * correctly refused to call those arms identical, and was correctly ignored,
+ * which is a sign the key is measuring the wrong thing.
+ *
+ * Hashing the files that actually compute the verdict makes the guarantee
+ * precise: equal hash means every run was graded by byte-identical logic, and
+ * a differing hash means the metric moved under you. git_sha is still recorded
+ * for forensics — it's how you find the commit — but it no longer gates
+ * anything.
+ *
+ * Reads source rather than importing, deliberately: the taxonomy is data, and
+ * a hash over `JSON.stringify(TAXONOMY)` would miss a changed predicate while a
+ * hash over the module's behaviour is not something you can take.
+ */
+const SCORER_SOURCES = [
+  "apps/api/src/verify/constraints.ts", // the checks
+  "apps/api/src/verify/resolve.ts", // lemmatise -> taxonomy -> lexical fallback
+  "packages/shared/src/ingredients.ts", // the canonical taxonomy the checks consult
+  "packages/shared/src/constraints.ts", // Verification + the violation kinds
+];
+
+function scorerHash(): string {
+  // .../apps/api/src/evals -> repo root
+  const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
+  const h = createHash("sha256");
+  try {
+    for (const rel of SCORER_SOURCES) {
+      h.update(rel); // a renamed file must move the hash even if its bytes don't
+      h.update(readFileSync(join(repoRoot, rel), "utf8"));
+    }
+  } catch {
+    // Running from a build output where the sources aren't shipped. Better to
+    // say so than to emit a hash of nothing that compares equal to everything.
+    return "unknown";
+  }
+  return h.digest("hex").slice(0, 8);
+}
+
+export const SCORER_HASH = scorerHash();
 
 /**
  * A content hash of the system prompt, recorded on every run.
@@ -126,6 +212,10 @@ export interface EvalRow {
   attempts?: number;
   firstPassOk?: boolean;
   firstPassKinds?: string;
+  /** The first attempt's full verdict, stored even when repair later fixed it. */
+  firstPassVerification?: Verification;
+  /** Was the repair loop enabled for this run? Part of the condition. */
+  repair?: boolean;
   /** Present only when the call failed before any usage was reported. */
   model?: string;
   effort?: string;
@@ -146,13 +236,13 @@ export function recordRun(row: EvalRow): void {
   db.prepare(
     `INSERT INTO eval_runs (
        id, suite_id, fixture_id, repeat_index,
-       model, effort, prompt_hash, fixture_set_hash, git_sha, replayed_from,
+       model, effort, prompt_hash, fixture_set_hash, git_sha, scorer_hash, repair, replayed_from,
        verification_ok, violation_count, violation_kinds, verification_json, recipe_title, recipe_json, error_code,
        input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
        cache_status, cost_usd, latency_ms,
        error_message, error_status, error_request_id, error_retryable,
-       attempts, first_pass_ok, first_pass_kinds
-     ) VALUES (?,?,?,?, ?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?, ?,?,?, ?,?,?,?, ?,?,?)`,
+       attempts, first_pass_ok, first_pass_kinds, first_pass_verification_json
+     ) VALUES (?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?, ?,?,?, ?,?,?,?, ?,?,?,?)`,
   ).run(
     row.id,
     row.suiteId,
@@ -163,6 +253,8 @@ export function recordRun(row: EvalRow): void {
     row.promptHashOverride ?? promptHash(),
     row.fixtureSetHash,
     GIT_SHA,
+    SCORER_HASH,
+    row.repair === undefined ? null : row.repair ? 1 : 0,
     row.replayedFrom ?? null,
     v ? (v.ok ? 1 : 0) : null,
     v ? v.violations.length : null,
@@ -185,6 +277,7 @@ export function recordRun(row: EvalRow): void {
     row.attempts ?? null,
     row.firstPassOk === undefined ? null : row.firstPassOk ? 1 : 0,
     row.firstPassKinds ?? null,
+    row.firstPassVerification ? JSON.stringify(row.firstPassVerification) : null,
   );
 }
 
@@ -193,7 +286,9 @@ export interface ConditionSummary {
   effort: string;
   prompt_hash: string;
   fixture_set_hash: string;
-  git_sha: string;
+  scorer_hash: string;
+  repair: number | null;
+  git_shas: string;
   n: number;
   passed: number;
   errors: number;
@@ -206,7 +301,16 @@ export interface ConditionSummary {
 export function summariseByCondition(suiteId?: string): ConditionSummary[] {
   return db
     .prepare(
-      `SELECT model, effort, prompt_hash, fixture_set_hash, git_sha,
+      `SELECT model, effort, prompt_hash, fixture_set_hash, repair,
+              -- Fall back to the commit for rows predating scorer_hash. Merging
+              -- them instead would claim runs were graded identically when the
+              -- record can't support it; the commit is the coarse key we used
+              -- to rely on, and over-splitting is the safe direction to fail.
+              COALESCE(scorer_hash, 'git:' || git_sha) AS scorer_hash,
+              -- Not a grouping key. Two commits that leave the scorer untouched
+              -- are the same condition; listing them keeps the audit trail
+              -- without splitting one arm into two rows.
+              group_concat(DISTINCT git_sha)             AS git_shas,
               COUNT(*)                                   AS n,
               COALESCE(SUM(verification_ok = 1), 0)      AS passed,
               COALESCE(SUM(error_code IS NOT NULL), 0)   AS errors,
@@ -215,7 +319,8 @@ export function summariseByCondition(suiteId?: string): ConditionSummary[] {
               COALESCE(AVG(latency_ms), 0)               AS avg_latency
        FROM eval_runs
        WHERE (? IS NULL OR suite_id = ?)
-       GROUP BY model, effort, prompt_hash, fixture_set_hash, git_sha
+       GROUP BY model, effort, prompt_hash, fixture_set_hash,
+                COALESCE(scorer_hash, 'git:' || git_sha), repair
        ORDER BY avg_cost`,
     )
     .all(suiteId ?? null, suiteId ?? null) as ConditionSummary[];
@@ -328,6 +433,10 @@ export const CURRENT_GIT_SHA = GIT_SHA;
  * generation is stochastic, so running it again is a legitimate way to collect
  * more samples. Guard idempotency where the operation is deterministic; allow
  * repetition where it is stochastic.
+ *
+ * Keyed on `scorer_hash` rather than `git_sha`. The commit was a proxy for "did
+ * the verifier change", and it over-fired: any unrelated commit made an
+ * identical replay look novel. The scorer hash asks the question directly.
  */
 export function findExistingReplay(
   sourceSuiteId: string,
@@ -337,17 +446,18 @@ export function findExistingReplay(
     .prepare(
       `SELECT suite_id, MIN(created_at) AS created_at, COUNT(*) AS n
        FROM eval_runs
-       WHERE replayed_from = ? AND git_sha = ? AND fixture_set_hash = ?
+       WHERE replayed_from = ? AND scorer_hash = ? AND fixture_set_hash = ?
        GROUP BY suite_id
        ORDER BY created_at DESC LIMIT 1`,
     )
-    .get(sourceSuiteId, GIT_SHA, fixtureSetHash) as
+    .get(sourceSuiteId, SCORER_HASH, fixtureSetHash) as
     | { suite_id: string; created_at: string; n: number }
     | undefined;
 }
 
 export interface RepairSummary {
   model: string;
+  repair: number | null;
   n: number;
   first_pass: number;
   final_pass: number;
@@ -365,7 +475,7 @@ export interface RepairSummary {
 export function summariseRepair(suiteId?: string): RepairSummary[] {
   return db
     .prepare(
-      `SELECT model,
+      `SELECT model, repair,
               COUNT(*)                                          AS n,
               COALESCE(SUM(first_pass_ok = 1), 0)               AS first_pass,
               COALESCE(SUM(verification_ok = 1), 0)             AS final_pass,
@@ -373,9 +483,62 @@ export function summariseRepair(suiteId?: string): RepairSummary[] {
               COALESCE(SUM(cost_usd), 0)                        AS total_cost
        FROM eval_runs
        WHERE (? IS NULL OR suite_id = ?) AND replayed_from IS NULL
-       GROUP BY model`,
+       GROUP BY model, repair`,
     )
     .all(suiteId ?? null, suiteId ?? null) as RepairSummary[];
+}
+
+export interface FirstPassFailure {
+  fixture_id: string;
+  repeat_index: number;
+  kinds: string;
+  details: string;
+  attempts: number | null;
+  rescued: boolean;
+}
+
+/**
+ * Every run whose FIRST attempt failed, with what the verifier actually said.
+ *
+ * This is the view the repair loop made necessary. Once repair is on, the final
+ * verdict is mostly "pass", so the headline table stops showing you where the
+ * model is weak — the failures are still happening, they're just being cleaned
+ * up before anyone sees them. A 100% pass rate with a 19% repair rate is a very
+ * different system from a 100% pass rate with a 0% repair rate, and only this
+ * table tells them apart.
+ */
+export function firstPassFailures(suiteId?: string): FirstPassFailure[] {
+  const rows = db
+    .prepare(
+      `SELECT fixture_id, repeat_index, first_pass_kinds, first_pass_verification_json,
+              attempts, verification_ok
+       FROM eval_runs
+       WHERE first_pass_ok = 0 AND (? IS NULL OR suite_id = ?)
+       ORDER BY fixture_id, repeat_index`,
+    )
+    .all(suiteId ?? null, suiteId ?? null) as Array<{
+      fixture_id: string; repeat_index: number; first_pass_kinds: string | null;
+      first_pass_verification_json: string | null; attempts: number | null;
+      verification_ok: number | null;
+    }>;
+
+  return rows.map((r) => {
+    let details = "";
+    if (r.first_pass_verification_json) {
+      const v = JSON.parse(r.first_pass_verification_json) as {
+        violations: Array<{ kind: string; detail: string }>;
+      };
+      details = v.violations.map((x) => x.detail).join(" | ");
+    }
+    return {
+      fixture_id: r.fixture_id,
+      repeat_index: r.repeat_index,
+      kinds: r.first_pass_kinds ?? "",
+      details,
+      attempts: r.attempts,
+      rescued: (r.attempts ?? 1) > 1 && r.verification_ok === 1,
+    };
+  });
 }
 
 export function latestSuiteId(): string | undefined {

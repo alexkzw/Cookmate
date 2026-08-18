@@ -69,6 +69,14 @@ export const StatsSchema = z
     thumbsUp: z.number(),
     thumbsDown: z.number(),
     verificationPassRate: z.number(),
+    /**
+     * Passed WITHOUT needing a repair. The honest quality number: once the
+     * repair loop is on, `verificationPassRate` is close to 1 by construction,
+     * because a failing recipe gets a second chance before anyone sees it.
+     */
+    firstPassRate: z.number(),
+    /** Share of turns that needed a second attempt — the loop's real workload. */
+    repairRate: z.number(),
     avgLatencyMs: z.number(),
     totalCostUsd: z.number(),
     cacheHitRate: z.number(),

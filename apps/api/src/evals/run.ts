@@ -9,7 +9,9 @@ import {
   summariseRepair,
   latestSuiteId,
   unexpectedRuns,
+  firstPassFailures,
   promptHash,
+  SCORER_HASH,
 } from "./store.js";
 
 /**
@@ -54,9 +56,10 @@ function report(suiteId?: string): void {
   console.table(
     conditions.map((c) => ({
       condition: `${c.model} / ${c.effort}`,
+      repair: c.repair === null ? "?" : c.repair ? "on" : "off",
       prompt: c.prompt_hash,
       fixtures: c.fixture_set_hash,
-      git: c.git_sha,
+      scorer: c.scorer_hash ?? "?",
       n: c.n,
       passed: `${c.passed}/${c.n}`,
       pass_rate: pct(c.pass_rate),
@@ -85,6 +88,7 @@ function report(suiteId?: string): void {
     console.table(
       repair.map((r) => ({
         model: r.model,
+        repair: r.repair === null ? "?" : r.repair ? "on" : "off",
         first_pass: `${r.first_pass}/${r.n}`,
         final_pass: `${r.final_pass}/${r.n}`,
         repaired: r.repaired,
@@ -93,6 +97,19 @@ function report(suiteId?: string): void {
         cost_per_pass: fmtUsd(r.final_pass > 0 ? r.total_cost / r.final_pass : 0),
       })),
     );
+
+    // With repair on, the final verdict is mostly "pass" — so without this the
+    // report shows a healthy system and hides every weakness repair papered
+    // over. These are the runs the model got wrong before being told.
+    const firstFails = firstPassFailures(suiteId);
+    if (firstFails.length > 0) {
+      console.log("\nFIRST-PASS FAILURES — what the model got wrong before repair saw it");
+      for (const f of firstFails) {
+        const tag = f.rescued ? "rescued" : "still failing";
+        console.log(`  ${f.fixture_id} #${f.repeat_index + 1} [${f.kinds}] (${tag})`);
+        console.log(`      ${f.details || "(detail not recorded — run predates first_pass_verification_json)"}`);
+      }
+    }
   }
 
   console.log("\nBY FIXTURE — which cases carry the failure rate");
@@ -163,7 +180,7 @@ async function main(): Promise<void> {
 
   console.log(
     `\n${runs} live generations · ${config.RECIPE_MODEL} / ${config.RECIPE_EFFORT} · ` +
-      `prompt ${promptHash()} · fixtures ${fixtureSetHash(fixtures)}\n` +
+      `prompt ${promptHash()} · fixtures ${fixtureSetHash(fixtures)} · scorer ${SCORER_HASH}\n` +
       `estimated cost ≈ ${fmtUsd(runs * perRun)}${flag("repair") ? " (+ up to ~40% if repairs fire)" : ""}` +
       ` · estimated time ≈ ${Math.ceil((runs * 26) / 60)} min\n` +
       `repair loop: ${flag("repair") ? "ON" : "off (baseline)"}\n`,

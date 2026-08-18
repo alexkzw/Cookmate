@@ -7,7 +7,11 @@ import { z } from "zod";
  */
 const EnvSchema = z.object({
   ANTHROPIC_API_KEY: z.string().min(1, "ANTHROPIC_API_KEY is required — get one at console.anthropic.com"),
-  RECIPE_MODEL: z.string().default("claude-opus-5"),
+  // Sonnet is the default on eval evidence, not on vibes: with the repair
+  // loop on it matched Opus at 36/36 for $0.0463 per passing recipe against
+  // Opus's $0.0561. Switching without the repair loop would have been wrong —
+  // bare Sonnet only managed 26/36. See README "Model selection".
+  RECIPE_MODEL: z.string().default("claude-sonnet-5"),
   RECIPE_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("medium"),
 
   SUPABASE_URL: z.string().url().optional(),
