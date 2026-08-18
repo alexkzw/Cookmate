@@ -6,6 +6,7 @@ import {
   summariseByCondition,
   summariseByFixture,
   summariseByKind,
+  summariseRepair,
   latestSuiteId,
   unexpectedRuns,
   promptHash,
@@ -16,6 +17,7 @@ import {
  *
  *   pnpm eval                          run every fixture once
  *   pnpm eval --repeats 3              three runs per fixture
+ *   pnpm eval --repair                 retry once when verification fails
  *   pnpm eval --only tight-time        just one case
  *   pnpm eval --replay                 re-score the last suite's stored recipes
  *   pnpm eval --replay <suiteId>       re-score a specific suite
@@ -76,6 +78,22 @@ function report(suiteId?: string): void {
   else
     for (const u of unexpected)
       console.log(`  ${u.fixture_id} #${u.repeat_index + 1}: ${u.error_code ?? u.details ?? "failed"}`);
+
+  const repair = summariseRepair(suiteId).filter((r) => r.first_pass !== r.n || r.repaired > 0);
+  if (repair.length > 0) {
+    console.log("\nREPAIR LOOP — first-pass vs final, and what the retries cost");
+    console.table(
+      repair.map((r) => ({
+        model: r.model,
+        first_pass: `${r.first_pass}/${r.n}`,
+        final_pass: `${r.final_pass}/${r.n}`,
+        repaired: r.repaired,
+        rescued: r.final_pass - r.first_pass,
+        total_cost: fmtUsd(r.total_cost),
+        cost_per_pass: fmtUsd(r.final_pass > 0 ? r.total_cost / r.final_pass : 0),
+      })),
+    );
+  }
 
   console.log("\nBY FIXTURE — which cases carry the failure rate");
   console.table(
@@ -146,7 +164,9 @@ async function main(): Promise<void> {
   console.log(
     `\n${runs} live generations · ${config.RECIPE_MODEL} / ${config.RECIPE_EFFORT} · ` +
       `prompt ${promptHash()} · fixtures ${fixtureSetHash(fixtures)}\n` +
-      `estimated cost ≈ ${fmtUsd(runs * perRun)} · estimated time ≈ ${Math.ceil((runs * 26) / 60)} min\n`,
+      `estimated cost ≈ ${fmtUsd(runs * perRun)}${flag("repair") ? " (+ up to ~40% if repairs fire)" : ""}` +
+      ` · estimated time ≈ ${Math.ceil((runs * 26) / 60)} min\n` +
+      `repair loop: ${flag("repair") ? "ON" : "off (baseline)"}\n`,
   );
 
   // Live generations cost real money, and a mistyped --repeats is an easy way
@@ -160,6 +180,7 @@ async function main(): Promise<void> {
   const result = await runSuite({
     fixtures,
     repeats,
+    repair: flag("repair"),
     onProgress: (line) => console.log(line),
   });
 

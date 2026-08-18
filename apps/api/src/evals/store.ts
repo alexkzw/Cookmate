@@ -4,6 +4,7 @@ import { db, addColumnIfMissing } from "../db/index.js";
 import { SYSTEM_PROMPT } from "../llm/prompts.js";
 import type { Verification } from "@cookmate/shared";
 import type { CallUsage } from "../llm/models.js";
+import type { ErrorInfo } from "../llm/errors.js";
 
 /**
  * Eval results live in their OWN table, not in `turns`.
@@ -64,6 +65,19 @@ addColumnIfMissing("eval_runs", "verification_json", "TEXT");
 // replaying twice yields identical results — so it must never be mistaken for
 // an independent run when counting n.
 addColumnIfMissing("eval_runs", "replayed_from", "TEXT");
+// An error code alone is not diagnosable. See llm/errors.ts: the message says
+// what happened, the request id is what the provider's support asks for, and
+// `retryable` is what decides whether spending money again could have helped.
+addColumnIfMissing("eval_runs", "error_message", "TEXT");
+addColumnIfMissing("eval_runs", "error_status", "INTEGER");
+addColumnIfMissing("eval_runs", "error_request_id", "TEXT");
+addColumnIfMissing("eval_runs", "error_retryable", "INTEGER");
+// Repair-loop outcome. first_pass_ok is the metric that matters: post-repair
+// pass rate without it is unfalsifiable, because you cannot tell a recipe that
+// was right first time from one that needed rescuing.
+addColumnIfMissing("eval_runs", "attempts", "INTEGER");
+addColumnIfMissing("eval_runs", "first_pass_ok", "INTEGER");
+addColumnIfMissing("eval_runs", "first_pass_kinds", "TEXT");
 
 /**
  * The commit the suite ran against.
@@ -108,6 +122,10 @@ export interface EvalRow {
   recipeTitle?: string;
   recipeJson?: string;
   errorCode?: string;
+  error?: ErrorInfo;
+  attempts?: number;
+  firstPassOk?: boolean;
+  firstPassKinds?: string;
   /** Present only when the call failed before any usage was reported. */
   model?: string;
   effort?: string;
@@ -131,8 +149,10 @@ export function recordRun(row: EvalRow): void {
        model, effort, prompt_hash, fixture_set_hash, git_sha, replayed_from,
        verification_ok, violation_count, violation_kinds, verification_json, recipe_title, recipe_json, error_code,
        input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-       cache_status, cost_usd, latency_ms
-     ) VALUES (?,?,?,?, ?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?, ?,?,?)`,
+       cache_status, cost_usd, latency_ms,
+       error_message, error_status, error_request_id, error_retryable,
+       attempts, first_pass_ok, first_pass_kinds
+     ) VALUES (?,?,?,?, ?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?, ?,?,?, ?,?,?,?, ?,?,?)`,
   ).run(
     row.id,
     row.suiteId,
@@ -158,6 +178,13 @@ export function recordRun(row: EvalRow): void {
     row.usage?.cacheStatus ?? null,
     row.usage?.costUsd ?? null,
     row.usage?.latencyMs ?? null,
+    row.error?.message ?? null,
+    row.error?.status ?? null,
+    row.error?.requestId ?? null,
+    row.error ? (row.error.retryable ? 1 : 0) : null,
+    row.attempts ?? null,
+    row.firstPassOk === undefined ? null : row.firstPassOk ? 1 : 0,
+    row.firstPassKinds ?? null,
   );
 }
 
@@ -317,6 +344,38 @@ export function findExistingReplay(
     .get(sourceSuiteId, GIT_SHA, fixtureSetHash) as
     | { suite_id: string; created_at: string; n: number }
     | undefined;
+}
+
+export interface RepairSummary {
+  model: string;
+  n: number;
+  first_pass: number;
+  final_pass: number;
+  repaired: number;
+  total_cost: number;
+}
+
+/**
+ * First-pass vs final pass rate, with what the extra attempts cost.
+ *
+ * The pair is the whole point. A post-repair pass rate on its own says nothing:
+ * a model that never fails and a model rescued on every run both report 100%.
+ * The gap between the two columns is the repair loop's actual contribution.
+ */
+export function summariseRepair(suiteId?: string): RepairSummary[] {
+  return db
+    .prepare(
+      `SELECT model,
+              COUNT(*)                                          AS n,
+              COALESCE(SUM(first_pass_ok = 1), 0)               AS first_pass,
+              COALESCE(SUM(verification_ok = 1), 0)             AS final_pass,
+              COALESCE(SUM(attempts > 1), 0)                    AS repaired,
+              COALESCE(SUM(cost_usd), 0)                        AS total_cost
+       FROM eval_runs
+       WHERE (? IS NULL OR suite_id = ?) AND replayed_from IS NULL
+       GROUP BY model`,
+    )
+    .all(suiteId ?? null, suiteId ?? null) as RepairSummary[];
 }
 
 export function latestSuiteId(): string | undefined {

@@ -1,14 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { verifyRecipe } from "../verify/constraints.js";
-import { streamRecipe, RecipeGenerationError } from "../llm/generate.js";
+import { generateVerifiedRecipe } from "../llm/verified.js";
+import { classifyError } from "../llm/errors.js";
 import { config } from "../config.js";
+import { RecipeGenerationError } from "../llm/generate.js";
 import { recordRun, promptHash } from "./store.js";
 import { fixtureSetHash, type Fixture } from "./fixtures.js";
 
 /**
  * The suite runner.
  *
- * It calls `streamRecipe` + `verifyRecipe` directly rather than going through
+ * It calls `generateVerifiedRecipe` directly rather than going through
  * POST /api/chat/stream. That's deliberate: this measures the *model and the
  * prompt*, not the HTTP wiring. Driving it through the route would mean auth,
  * SSE parsing, and writing each fixture's pantry into the database first — all
@@ -22,6 +23,8 @@ import { fixtureSetHash, type Fixture } from "./fixtures.js";
 export interface SuiteOptions {
   fixtures: Fixture[];
   repeats: number;
+  /** Off by default: the baseline must be measured without it. */
+  repair?: boolean;
   /** Print progress as it goes — a 20-minute silent run is unnerving. */
   onProgress?: (line: string) => void;
 }
@@ -58,8 +61,10 @@ export async function runSuite(opts: SuiteOptions): Promise<SuiteResult> {
 
       try {
         // The delta callback is a no-op: nothing is watching tokens arrive.
-        const { recipe, usage } = await streamRecipe(fixture.request, () => {});
-        const verification = verifyRecipe(recipe, fixture.request);
+        const result = await generateVerifiedRecipe(fixture.request, () => {}, {
+          repair: opts.repair ?? false,
+        });
+        const { recipe, usage, verification } = result;
 
         costUsd += usage.costUsd;
         if (!verification.ok) failures += 1;
@@ -74,11 +79,15 @@ export async function runSuite(opts: SuiteOptions): Promise<SuiteResult> {
           verification,
           recipeTitle: recipe.title,
           recipeJson: JSON.stringify(recipe),
+          attempts: result.attempts,
+          firstPassOk: result.firstPassOk,
+          firstPassKinds: result.firstPassKinds.join(","),
         });
 
+        const repaired = result.attempts > 1 ? ` (repaired from ${result.firstPassKinds.join(",")})` : "";
         const verdict = verification.ok
-          ? "pass"
-          : `FAIL ${verification.violations.map((v) => v.kind).join(",")}`;
+          ? `pass${repaired}`
+          : `FAIL ${verification.violations.map((v) => v.kind).join(",")}${repaired}`;
         log(
           `${label}  ${verdict}  $${usage.costUsd.toFixed(4)}  ` +
             `${(usage.latencyMs / 1000).toFixed(1)}s  ${usage.cacheStatus}`,
@@ -87,7 +96,7 @@ export async function runSuite(opts: SuiteOptions): Promise<SuiteResult> {
         // One truncation must not abandon a twenty-minute suite. Record it as a
         // result — an error rate is a finding, not an interruption.
         errors += 1;
-        const code = err instanceof RecipeGenerationError ? err.code : "internal_error";
+        const info = classifyError(err);
         const usage = err instanceof RecipeGenerationError ? err.usage : undefined;
         if (usage) costUsd += usage.costUsd;
 
@@ -98,12 +107,13 @@ export async function runSuite(opts: SuiteOptions): Promise<SuiteResult> {
           repeatIndex: i,
           fixtureSetHash: setHash,
           usage,
-          errorCode: code,
+          errorCode: info.code,
+          error: info,
           model: config.RECIPE_MODEL,
           effort: config.RECIPE_EFFORT,
         });
 
-        log(`${label}  ERROR ${code}`);
+        log(`${label}  ERROR ${info.code}${info.retryable ? " (retryable)" : ""}: ${info.message}`);
       }
     }
   }
