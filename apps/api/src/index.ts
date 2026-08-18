@@ -7,6 +7,7 @@ import { chatRoutes } from "./routes/chat.js";
 import { pantryRoutes } from "./routes/pantry.js";
 import { feedbackRoutes } from "./routes/feedback.js";
 import { statsRoutes } from "./routes/stats.js";
+import { limitRoutes } from "./routes/limits.js";
 import { describeModel } from "./llm/models.js";
 import "./db/index.js"; // run migrations at boot
 
@@ -37,6 +38,7 @@ app.route("/api/chat", chatRoutes);
 app.route("/api/pantry", pantryRoutes);
 app.route("/api/feedback", feedbackRoutes);
 app.route("/api/stats", statsRoutes);
+app.route("/api/limits", limitRoutes);
 
 if (config.DEV_ALLOW_ANONYMOUS) {
   console.warn("⚠️  DEV_ALLOW_ANONYMOUS=1 — auth is bypassed. Never run this in production.");
