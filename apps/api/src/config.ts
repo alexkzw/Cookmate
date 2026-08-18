@@ -14,6 +14,21 @@ const EnvSchema = z.object({
   RECIPE_MODEL: z.string().default("claude-sonnet-5"),
   RECIPE_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("medium"),
 
+  // ---- Admission control. See limits/budget.ts for why there are four. ----
+  // Burst, per user. Bounds requests, NOT money: cost per turn is not constant.
+  RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(10),
+  // Simultaneous streams per user. A turn holds a connection ~26s, so a human
+  // has no use for more than a couple; a runaway client loop wants hundreds.
+  MAX_CONCURRENT_PER_USER: z.coerce.number().int().positive().default(2),
+  // Rolling 24h spend cap per user — fairness between users.
+  DAILY_COST_CAP_USD: z.coerce.number().positive().default(2),
+  // Rolling 24h spend cap across everyone — the credit card. Per-user caps do
+  // not bound the bill, because (users x cap) is unbounded with open signups.
+  GLOBAL_DAILY_COST_CAP_USD: z.coerce.number().positive().default(20),
+  // Claimed against the cap while a call is in flight and its true cost is
+  // unknown. Pessimistic on purpose: ~$0.046 measured for sonnet + repair.
+  ESTIMATED_TURN_COST_USD: z.coerce.number().positive().default(0.06),
+
   SUPABASE_URL: z.string().url().optional(),
   SUPABASE_JWKS_URL: z.string().url().optional(),
 

@@ -26,9 +26,7 @@ export interface Fixture {
    * Every fixture here is satisfiable, so the expectation is always `ok: true`.
    * A failure therefore means one of two things — the model got it wrong, or the
    * verifier did — and the report flags it for inspection rather than folding it
-   * into a pass rate that can't tell those apart. That distinction is precisely
-   * what was missing when this suite reported 83% while the model was right and
-   * the checker was wrong.
+   * into a pass rate that can't tell those apart.
    *
    * Note this is not a full confusion matrix, and can't be: the verifier's
    * ability to *detect* violations needs a known-bad recipe, which you can't
