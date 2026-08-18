@@ -3,8 +3,9 @@ import { streamSSE } from "hono/streaming";
 import { CookRequestSchema, type CookRequest, type StreamEvent } from "@cookmate/shared";
 import { requireAuth } from "../auth.js";
 import { getPantry, getPreferences } from "../db/index.js";
-import { streamRecipe, RecipeGenerationError } from "../llm/generate.js";
-import { verifyRecipe } from "../verify/constraints.js";
+import { RecipeGenerationError } from "../llm/generate.js";
+import { generateVerifiedRecipe } from "../llm/verified.js";
+import { classifyError } from "../llm/errors.js";
 import { openTurn, completeTurn, failTurn } from "../telemetry/turns.js";
 
 export const chatRoutes = new Hono();
@@ -69,21 +70,26 @@ chatRoutes.post("/stream", requireAuth, async (c) => {
     await send({ type: "start", turnId });
 
     try {
-      const { recipe, usage } = await streamRecipe(
-        request,
-        (text) => {
-          // Fire-and-forget: backpressure on token deltas would stall generation.
-          void send({ type: "delta", text });
-        },
-        c.req.raw.signal,
-      );
+      const { recipe, usage, verification, attempts } =
+        await generateVerifiedRecipe(
+          request,
+          (text) => {
+            // Fire-and-forget: backpressure on token deltas would stall generation.
+            void send({ type: "delta", text });
+          },
+          {
+            repair: true,
+            signal: c.req.raw.signal,
+            // The first recipe has already streamed to the browser, so a silent
+            // second attempt would look like a stall. Say what's happening.
+            onRepairStart: (issues) => void send({ type: "repairing", issues }),
+          },
+        );
 
       await send({ type: "recipe", recipe });
-
-      const verification = verifyRecipe(recipe, request);
       await send({ type: "verification", verification });
 
-      completeTurn(turnId, { recipe, verification, ...usage });
+      completeTurn(turnId, { recipe, verification, ...usage, attempts });
 
       await send({
         type: "done",
@@ -108,7 +114,7 @@ chatRoutes.post("/stream", requireAuth, async (c) => {
       // A failed generation is still a billed generation — carry its usage into
       // the turn log so the cost of failure is visible, not just its existence.
       const usage = err instanceof RecipeGenerationError ? err.usage : undefined;
-      failTurn(turnId, code, usage);
+      failTurn(turnId, classifyError(err), usage);
       console.error(`[chat] turn ${turnId} failed (${code}):`, err);
       await send({ type: "error", message, code });
     }
