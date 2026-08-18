@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { Stats } from "@cookmate/shared";
 import { db } from "../db/index.js";
+import { recentLimitEvents } from "../limits/budget.js";
 
 export const statsRoutes = new Hono();
 
@@ -102,6 +103,7 @@ statsRoutes.get("/", (c) => {
     avgLatencyMs: Math.round(totals.latency ?? 0),
     totalCostUsd: Number((totals.cost ?? 0).toFixed(4)),
     cacheHitRate: quality.completed > 0 ? quality.cache_hits / quality.completed : 0,
+    limitEvents: recentLimitEvents(),
     weekly,
   };
 
