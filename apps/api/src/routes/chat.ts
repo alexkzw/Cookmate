@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { CookRequestSchema, type CookRequest, type StreamEvent } from "@cookmate/shared";
 import { requireAuth } from "../auth.js";
+import { enforceLimits } from "../limits/middleware.js";
 import { getPantry, getPreferences } from "../db/index.js";
 import { RecipeGenerationError } from "../llm/generate.js";
 import { generateVerifiedRecipe } from "../llm/verified.js";
@@ -24,8 +25,11 @@ export const chatRoutes = new Hono();
  * Showing the verification resolve a beat after the recipe is honest about the
  * architecture, and it's the moment the product's actual claim gets made.
  */
-chatRoutes.post("/stream", requireAuth, async (c) => {
+chatRoutes.post("/stream", requireAuth, enforceLimits, async (c) => {
   const user = c.get("user");
+  // Claimed by enforceLimits before the model was called; released below once
+  // the real cost is recorded, so the estimate stops mattering immediately.
+  const releaseBudget = c.get("releaseBudget");
 
   const body = await c.req.json().catch(() => null);
 
@@ -124,6 +128,12 @@ chatRoutes.post("/stream", requireAuth, async (c) => {
       failTurn(turnId, classifyError(err), usage);
       console.error(`[chat] turn ${turnId} failed (${code}):`, err);
       await send({ type: "error", message, code });
+    } finally {
+      // Must be here, not in the middleware. `next()` returns when the stream
+      // STARTS, so releasing there would free the budget ~26 seconds before the
+      // call it is accounting for actually finishes — reopening exactly the
+      // concurrency hole the reservation exists to close.
+      releaseBudget();
     }
   });
 });
