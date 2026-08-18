@@ -19,6 +19,13 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("start"), turnId: z.string() }),
   z.object({ type: z.literal("delta"), text: z.string() }),
   z.object({ type: z.literal("recipe"), recipe: RecipeSchema }),
+  /**
+   * The first attempt failed verification and we're asking the model to fix it.
+   * Sent because the browser has already watched a recipe stream in — a silent
+   * second attempt would read as a stall, and hiding the retry would misrepresent
+   * what the system actually did.
+   */
+  z.object({ type: z.literal("repairing"), issues: z.array(z.string()) }),
   z.object({ type: z.literal("verification"), verification: VerificationSchema }),
   z.object({
     type: z.literal("done"),
