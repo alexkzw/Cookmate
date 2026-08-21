@@ -69,20 +69,37 @@ function buildMessages(history: ConversationTurn[], finalUserTurn: string): Anth
 }
 
 /**
+ * CACHE TTL — one value, used for every breakpoint in the request.
+ *
+ * THE API ENFORCES AN ORDERING RULE: a 1h block must not come after a 5m block,
+ * where order is tools → system → messages. TTLs have to be non-increasing.
+ *
+ * That rules out the arrangement this code originally shipped — 5m on the
+ * system block, 1h on the conversation tail — which is a 400 the moment a
+ * request carries both. It only fires on the second follow-up, because that is
+ * the first request with two breakpoints, so single-turn traffic never sees it.
+ *
+ * The tail is the breakpoint that needs the longer life: the gap between turns
+ * is a person reading a recipe and deciding what to change, which routinely
+ * exceeds five minutes. Since the tail cannot outlive the system block, the
+ * system block is promoted to match rather than the tail cut down.
+ *
+ * The cost is real and worth stating: a 1h write bills 2x base against 1.25x
+ * for 5m, so single-turn break-even moves from ~2 requests to ~3. In exchange
+ * the shared system prefix survives an hour of silence instead of five minutes,
+ * which for sporadic traffic is the difference between warm and cold. Reads
+ * stay at 0.1x either way. `cache_status` and the token counts are on every
+ * turn, so this is checkable rather than believed.
+ */
+const CACHE_TTL = "1h" as const;
+
+/**
  * SECOND CACHE BREAKPOINT — the conversation tail.
  *
  * Caching is a prefix match, and a conversation only ever APPENDS, so history
  * is a growing stable prefix. Multi-turn is therefore the best case for
  * caching, not a tax on it: a breakpoint on the last block of the newest turn
  * writes only the increment, and the next request reads everything before it.
- *
- * TTL is one hour rather than the five-minute default because the gap here is
- * human reading time — someone scans a recipe and then asks "can I swap the
- * chicken?", which routinely exceeds five minutes. The trade is real: a 1h
- * write costs 2x base versus 1.25x for 5m, and reads cost 0.1x. Break-even is
- * therefore ~3 requests on 1h against ~2 on 5m, so this only pays if
- * conversations actually reach a third turn. `attempts` and the turn chain are
- * logged so that assumption can be checked rather than believed.
  *
  * Single-turn requests get no breakpoint here at all — there is no prior
  * conversation to reuse, so a marker would pay the write premium for a read
@@ -102,11 +119,36 @@ function withConversationBreakpoint(messages: Anthropic.MessageParam[]): Anthrop
         {
           type: "text" as const,
           text: last.content,
-          cache_control: { type: "ephemeral" as const, ttl: "1h" as const },
+          cache_control: { type: "ephemeral" as const, ttl: CACHE_TTL },
         },
       ],
     },
   ];
+}
+
+/**
+ * The exact `system` and `messages` blocks a request will carry.
+ *
+ * Split out from `streamRecipe` so the cache-control layout can be asserted in
+ * a unit test without a live call — the TTL-ordering rule is enforced by the
+ * API at request time, which is the most expensive place to discover it.
+ */
+export function buildPromptBlocks(
+  request: CookRequest,
+  options: { userTurnOverride?: string; history?: ConversationTurn[] } = {},
+): { system: Anthropic.TextBlockParam[]; messages: Anthropic.MessageParam[] } {
+  return {
+    system: [
+      {
+        type: "text",
+        text: SYSTEM_PROMPT,
+        cache_control: { type: "ephemeral", ttl: CACHE_TTL },
+      },
+    ],
+    messages: withConversationBreakpoint(
+      buildMessages(options.history ?? [], options.userTurnOverride ?? buildUserTurn(request)),
+    ),
+  };
 }
 
 /**
@@ -145,6 +187,7 @@ export async function streamRecipe(
 ): Promise<GenerationResult> {
   const startedAt = Date.now();
   const model = config.RECIPE_MODEL;
+  const blocks = buildPromptBlocks(request, options);
 
   const stream = anthropic.messages.stream(
     {
@@ -152,20 +195,12 @@ export async function streamRecipe(
       // Generous because thinking is on by default on Opus 5 and max_tokens
       // caps thinking + visible output together. Too low truncates mid-recipe.
       max_tokens: 16_000,
-      system: [
-        {
-          type: "text",
-          text: SYSTEM_PROMPT,
-          cache_control: { type: "ephemeral" },
-        },
-      ],
+      system: blocks.system,
       output_config: {
         effort: config.RECIPE_EFFORT,
         format: zodOutputFormat(RecipeSchema),
       },
-      messages: withConversationBreakpoint(
-        buildMessages(options.history ?? [], options.userTurnOverride ?? buildUserTurn(request)),
-      ),
+      messages: blocks.messages,
     },
     { signal },
   );
