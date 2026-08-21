@@ -60,6 +60,19 @@ export function classifyError(err: unknown): ErrorInfo {
     };
   }
 
+  // MUST come before the APIError branch below: APIUserAbortError EXTENDS
+  // APIError, so checking the general case first swallows it and reports a
+  // cancelled request as `api_error` with no status. That is the bug this
+  // comment exists to prevent a second time — a user pressing Stop is not a
+  // provider failure, and letting it land in the error rate corrupts the one
+  // number you would page on.
+  if (
+    err instanceof Anthropic.APIUserAbortError ||
+    (err instanceof Error && err.name === "AbortError")
+  ) {
+    return { code: "aborted", message: "Client aborted the request.", retryable: false };
+  }
+
   if (err instanceof Anthropic.APIError) {
     const status = err.status;
     const requestId = err.requestID ?? undefined;
@@ -77,12 +90,6 @@ export function classifyError(err: unknown): ErrorInfo {
     if (typeof status === "number" && status >= 500)
       return { ...base, code: "provider_error", retryable: true };
     return { ...base, code: "api_error", retryable: false };
-  }
-
-  // A client hanging up is not a failure of the system — record it separately
-  // so it never inflates the error rate you act on.
-  if (err instanceof Anthropic.APIUserAbortError || (err instanceof Error && err.name === "AbortError")) {
-    return { code: "aborted", message: "Client aborted the request.", retryable: false };
   }
 
   if (err instanceof Error) {
