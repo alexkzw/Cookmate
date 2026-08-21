@@ -56,10 +56,33 @@ export type Unit = z.infer<typeof UnitSchema>;
 export const IngredientSourceSchema = z.enum(["pantry", "staple", "shopping"]);
 export type IngredientSource = z.infer<typeof IngredientSourceSchema>;
 
+/**
+ * DISPLAY NAME AND MATCH KEY ARE DIFFERENT FIELDS.
+ *
+ * They used to be one. `name` had to be canonical ("chicken thigh") so the
+ * verifier could match it against the pantry — which cost twice over: the
+ * recipe card read like a database row, and matching was still free text,
+ * which is where the verifier's false positives came from.
+ *
+ * Splitting them lets each field do one job. `name` is prose for a human.
+ * `matchTerm` is a canonical key the verifier resolves, and because the model
+ * emits it explicitly rather than having it inferred from prose, it can be
+ * constrained and audited on its own.
+ *
+ * Backwards compatibility matters here: recipes generated before this field
+ * existed are still stored and still replayable, so the verifier falls back to
+ * `name` when `matchTerm` is absent rather than failing to resolve them.
+ */
 export const IngredientSchema = z
   .object({
-    /** Canonical singular name, lowercase: "chicken thigh", not "2 Chicken Thighs". */
-    name: z.string().describe("Canonical lowercase ingredient name, singular, no quantity"),
+    /** How it reads on the card: "ripe tomatoes, diced". Prose, for a person. */
+    name: z.string().describe("How this reads on the recipe card, e.g. 'ripe tomatoes, diced'"),
+    /** The key the verifier matches on: "tomato". Canonical, singular, lowercase. */
+    matchTerm: z
+      .string()
+      .describe(
+        "The canonical lowercase singular form of the core ingredient, for programmatic pantry matching. No quantity, no preparation, no adjectives: 'tomato', not 'ripe tomatoes, diced'. Use the specific product where it changes what the item is: 'coconut milk', not 'coconut'.",
+      ),
     quantity: z.number().describe("Numeric amount; use 0 with unit 'to_taste' when unmeasured"),
     unit: UnitSchema,
     source: IngredientSourceSchema.describe(
