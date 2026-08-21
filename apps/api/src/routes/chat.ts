@@ -142,7 +142,12 @@ chatRoutes.post("/stream", requireAuth, enforceLimits, async (c) => {
         },
       });
     } catch (err) {
-      const code = err instanceof RecipeGenerationError ? err.code : "internal_error";
+      // Classify ONCE and use that everywhere. The log line used to report
+      // "internal_error" for anything that wasn't a RecipeGenerationError while
+      // the database recorded the properly classified code — so a provider 400
+      // showed up in the console as an internal bug, and the two records of the
+      // same failure disagreed. Whatever you log is what someone greps at 2am.
+      const info = classifyError(err);
       const message =
         err instanceof RecipeGenerationError
           ? err.message
@@ -150,9 +155,12 @@ chatRoutes.post("/stream", requireAuth, enforceLimits, async (c) => {
       // A failed generation is still a billed generation — carry its usage into
       // the turn log so the cost of failure is visible, not just its existence.
       const usage = err instanceof RecipeGenerationError ? err.usage : undefined;
-      failTurn(turnId, classifyError(err), usage);
-      console.error(`[chat] turn ${turnId} failed (${code}):`, err);
-      await send({ type: "error", message, code });
+      failTurn(turnId, info, usage);
+      console.error(
+        `[chat] turn ${turnId} failed (${info.code}${info.status ? ` ${info.status}` : ""}` +
+          `${info.requestId ? `, request ${info.requestId}` : ""}): ${info.message}`,
+      );
+      await send({ type: "error", message, code: info.code });
     } finally {
       // Must be here, not in the middleware. `next()` returns when the stream
       // STARTS, so releasing there would free the budget ~26 seconds before the
