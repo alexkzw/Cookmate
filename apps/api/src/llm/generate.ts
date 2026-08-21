@@ -5,6 +5,7 @@ import { anthropic } from "./client.js";
 import { config } from "../config.js";
 import { SYSTEM_PROMPT, buildUserTurn } from "./prompts.js";
 import { classifyCache, computeCostUsd, type CallUsage, type TokenUsage } from "./models.js";
+import type { ConversationTurn } from "../telemetry/turns.js";
 
 export interface GenerationResult {
   recipe: Recipe;
@@ -50,6 +51,65 @@ function summariseUsage(
 }
 
 /**
+ * Assemble the messages array from prior turns plus this request.
+ *
+ * Each earlier turn contributes the user prompt exactly as it was rendered and
+ * the recipe the model replied with. Feeding the stored JSON back verbatim
+ * matters: paraphrasing the assistant turn would change the prefix bytes and
+ * cost the cache, and it would also misrepresent what the model actually said.
+ */
+function buildMessages(history: ConversationTurn[], finalUserTurn: string): Anthropic.MessageParam[] {
+  const messages: Anthropic.MessageParam[] = [];
+  for (const turn of history) {
+    messages.push({ role: "user", content: turn.userTurn });
+    messages.push({ role: "assistant", content: turn.recipeJson });
+  }
+  messages.push({ role: "user", content: finalUserTurn });
+  return messages;
+}
+
+/**
+ * SECOND CACHE BREAKPOINT — the conversation tail.
+ *
+ * Caching is a prefix match, and a conversation only ever APPENDS, so history
+ * is a growing stable prefix. Multi-turn is therefore the best case for
+ * caching, not a tax on it: a breakpoint on the last block of the newest turn
+ * writes only the increment, and the next request reads everything before it.
+ *
+ * TTL is one hour rather than the five-minute default because the gap here is
+ * human reading time — someone scans a recipe and then asks "can I swap the
+ * chicken?", which routinely exceeds five minutes. The trade is real: a 1h
+ * write costs 2x base versus 1.25x for 5m, and reads cost 0.1x. Break-even is
+ * therefore ~3 requests on 1h against ~2 on 5m, so this only pays if
+ * conversations actually reach a third turn. `attempts` and the turn chain are
+ * logged so that assumption can be checked rather than believed.
+ *
+ * Single-turn requests get no breakpoint here at all — there is no prior
+ * conversation to reuse, so a marker would pay the write premium for a read
+ * that never happens.
+ */
+function withConversationBreakpoint(messages: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
+  if (messages.length < 2) return messages;
+
+  const last = messages[messages.length - 1];
+  if (last === undefined || typeof last.content !== "string") return messages;
+
+  return [
+    ...messages.slice(0, -1),
+    {
+      role: last.role,
+      content: [
+        {
+          type: "text" as const,
+          text: last.content,
+          cache_control: { type: "ephemeral" as const, ttl: "1h" as const },
+        },
+      ],
+    },
+  ];
+}
+
+/**
  * Stream a recipe.
  *
  * Two things worth understanding here:
@@ -71,13 +131,17 @@ export async function streamRecipe(
   request: CookRequest,
   onTextDelta: (text: string) => void,
   signal?: AbortSignal,
-  /**
-   * Replaces the rendered user turn. Used by the repair loop, which needs to
-   * send the original request PLUS the verifier's findings — and must do so
-   * after the cache breakpoint, so the system prompt stays byte-identical and
-   * the retry reads the cached prefix instead of writing a new one.
-   */
-  userTurnOverride?: string,
+  options: {
+    /**
+     * Replaces the rendered user turn. Used by the repair loop, which needs to
+     * send the original request PLUS the verifier's findings — and must do so
+     * after the cache breakpoint, so the system prompt stays byte-identical and
+     * the retry reads the cached prefix instead of writing a new one.
+     */
+    userTurnOverride?: string;
+    /** Prior turns of this conversation, oldest first. Empty for a fresh ask. */
+    history?: ConversationTurn[];
+  } = {},
 ): Promise<GenerationResult> {
   const startedAt = Date.now();
   const model = config.RECIPE_MODEL;
@@ -99,7 +163,9 @@ export async function streamRecipe(
         effort: config.RECIPE_EFFORT,
         format: zodOutputFormat(RecipeSchema),
       },
-      messages: [{ role: "user", content: userTurnOverride ?? buildUserTurn(request) }],
+      messages: withConversationBreakpoint(
+        buildMessages(options.history ?? [], options.userTurnOverride ?? buildUserTurn(request)),
+      ),
     },
     { signal },
   );
