@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
+import { z } from "zod";
 import { CookRequestSchema, type CookRequest, type StreamEvent } from "@cookmate/shared";
 import { requireAuth } from "../auth.js";
 import { enforceLimits } from "../limits/middleware.js";
@@ -7,7 +8,8 @@ import { getPantry, getPreferences } from "../db/index.js";
 import { RecipeGenerationError } from "../llm/generate.js";
 import { generateVerifiedRecipe } from "../llm/verified.js";
 import { classifyError } from "../llm/errors.js";
-import { openTurn, completeTurn, failTurn } from "../telemetry/turns.js";
+import { openTurn, completeTurn, failTurn, conversationHistory } from "../telemetry/turns.js";
+import { buildUserTurn } from "../llm/prompts.js";
 
 export const chatRoutes = new Hono();
 
@@ -44,6 +46,17 @@ chatRoutes.post("/stream", requireAuth, enforceLimits, async (c) => {
     dislikes: true,
     dietary: true,
     cookware: true,
+  }).extend({
+    /**
+     * The turn this one continues. When present, `craving` is read as a
+     * follow-up ("make it faster", "swap the chicken") rather than a fresh ask,
+     * and the prior conversation is replayed to the model.
+     *
+     * Follow-ups still return a full, freshly verified Recipe — they are
+     * re-generations with an added constraint, not chat. That keeps every claim
+     * the verifier makes true on turn five as well as turn one.
+     */
+    followUpTo: z.string().min(1).max(64).optional(),
   });
   const parsed = InboundSchema.safeParse(body);
 
@@ -57,16 +70,27 @@ chatRoutes.post("/stream", requireAuth, enforceLimits, async (c) => {
     );
   }
 
+  const { followUpTo, ...cookFields } = parsed.data;
   const stored = getPreferences(user.id);
   const request: CookRequest = {
-    ...parsed.data,
+    ...cookFields,
     pantry: getPantry(user.id),
     dislikes: stored.dislikes,
     dietary: stored.dietary,
     cookware: stored.cookware,
   };
 
-  const turnId = openTurn(user.id, request);
+  // Scoped to this user inside conversationHistory — an unguessable turn id is
+  // not an authorisation model, and history is the most sensitive thing stored.
+  const history = followUpTo ? conversationHistory(user.id, followUpTo) : [];
+  if (followUpTo && history.length === 0) {
+    return c.json({ error: "That conversation is no longer available.", code: "unknown_turn" }, 404);
+  }
+
+  // Rendered once, here, and recorded — so "the model ignored the pantry" and
+  // "the pantry never reached the model" stay distinguishable after the fact.
+  const userTurn = buildUserTurn(request);
+  const turnId = openTurn(user.id, request, { userTurn, parentTurnId: followUpTo ?? null });
 
   return streamSSE(c, async (sse) => {
     const send = (event: StreamEvent) => sse.writeSSE({ data: JSON.stringify(event) });
@@ -83,6 +107,7 @@ chatRoutes.post("/stream", requireAuth, enforceLimits, async (c) => {
           },
           {
             repair: true,
+            history,
             signal: c.req.raw.signal,
             // The first recipe has already streamed to the browser, so a silent
             // second attempt would look like a stall. Say what's happening.
