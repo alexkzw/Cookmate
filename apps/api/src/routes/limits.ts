@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { requireAuth } from "../auth.js";
-import { limitStatus } from "../limits/middleware.js";
+import { limitStatus } from "../limits/policy.js";
 
 export const limitRoutes = new Hono();
 
