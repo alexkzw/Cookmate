@@ -82,6 +82,18 @@ CREATE TABLE IF NOT EXISTS turns (
   error_code         TEXT
 );
 
+-- The shopping list. The verifier already computes what a recipe would need
+-- you to buy; this is where that lands when someone decides to act on it.
+CREATE TABLE IF NOT EXISTS shopping_items (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name       TEXT NOT NULL,
+  -- Which recipe put it there, so an item can be traced back to a reason.
+  from_turn  TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(user_id, name)
+);
+
 CREATE INDEX IF NOT EXISTS idx_turns_user_created ON turns(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_turns_created ON turns(created_at DESC);
 `);
@@ -159,6 +171,61 @@ export function setPantry(userId: string, items: string[]): void {
       if (name) insert.run(userId, name);
     }
   })();
+}
+
+export interface ShoppingItem {
+  name: string;
+  fromTurn: string | null;
+  addedAt: string;
+}
+
+export function getShoppingList(userId: string): ShoppingItem[] {
+  const rows = db
+    .prepare(
+      `SELECT name, from_turn, created_at FROM shopping_items
+       WHERE user_id = ? ORDER BY created_at, name`,
+    )
+    .all(userId) as Array<{ name: string; from_turn: string | null; created_at: string }>;
+  return rows.map((r) => ({ name: r.name, fromTurn: r.from_turn, addedAt: r.created_at }));
+}
+
+/**
+ * Add items, ignoring ones already on the list.
+ *
+ * `INSERT OR IGNORE` against the UNIQUE constraint is what makes this
+ * idempotent, which matters more here than it looks: this is reachable from an
+ * MCP tool, and an agent that retries a call must not end up with the same
+ * item three times. Returns the names actually added so the caller can say
+ * what changed rather than what it asked for.
+ */
+export function addToShoppingList(
+  userId: string,
+  items: string[],
+  fromTurn?: string | null,
+): string[] {
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO shopping_items (user_id, name, from_turn) VALUES (?, ?, ?)`,
+  );
+  const added: string[] = [];
+  db.transaction(() => {
+    for (const raw of items) {
+      const name = raw.trim().toLowerCase();
+      if (!name) continue;
+      if (insert.run(userId, name, fromTurn ?? null).changes > 0) added.push(name);
+    }
+  })();
+  return added;
+}
+
+export function removeFromShoppingList(userId: string, items: string[]): number {
+  const del = db.prepare(`DELETE FROM shopping_items WHERE user_id = ? AND name = ?`);
+  let removed = 0;
+  db.transaction(() => {
+    for (const raw of items) {
+      removed += del.run(userId, raw.trim().toLowerCase()).changes;
+    }
+  })();
+  return removed;
 }
 
 export interface Preferences {
