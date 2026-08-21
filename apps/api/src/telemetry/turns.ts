@@ -16,12 +16,17 @@ import type { ErrorInfo } from "../llm/errors.js";
  * the thing you most want to see in the stats.
  */
 
-export function openTurn(userId: string, request: CookRequest): string {
+export function openTurn(
+  userId: string,
+  request: CookRequest,
+  meta: { userTurn: string; parentTurnId?: string | null } ,
+): string {
   const id = randomUUID();
   db.prepare(
     `INSERT INTO turns
-       (id, user_id, craving, servings, max_minutes, effort, will_shop, pantry_json, cookware_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, user_id, craving, servings, max_minutes, effort, will_shop, pantry_json, cookware_json,
+        user_turn, parent_turn_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     userId,
@@ -32,8 +37,61 @@ export function openTurn(userId: string, request: CookRequest): string {
     request.willShop ? 1 : 0,
     JSON.stringify(request.pantry),
     JSON.stringify(request.cookware),
+    meta.userTurn,
+    meta.parentTurnId ?? null,
   );
   return id;
+}
+
+export interface ConversationTurn {
+  userTurn: string;
+  recipeJson: string;
+}
+
+/**
+ * Rebuild the conversation leading up to a turn, oldest first.
+ *
+ * Walks `parent_turn_id` backwards and returns only turns that actually
+ * produced a recipe — an errored turn has no assistant reply, and inventing one
+ * would put words in the model's mouth.
+ *
+ * Scoped by user_id: a turn id is a UUID, but "unguessable" is not an
+ * authorisation model, and conversation history is the most sensitive thing
+ * this table holds.
+ *
+ * Bounded at `limit` turns. History is the part of the prompt that grows
+ * without a natural ceiling, and cost grows with it — the cap is what keeps a
+ * long conversation from quietly becoming the most expensive request you serve.
+ */
+export function conversationHistory(
+  userId: string,
+  leafTurnId: string,
+  limit = 6,
+): ConversationTurn[] {
+  const row = db.prepare(
+    `SELECT user_turn, recipe_json, parent_turn_id FROM turns WHERE id = ? AND user_id = ?`,
+  );
+
+  const chain: ConversationTurn[] = [];
+  let cursor: string | null = leafTurnId;
+  const seen = new Set<string>();
+
+  while (cursor && chain.length < limit) {
+    if (seen.has(cursor)) break; // corrupt parent chain; refuse to loop forever
+    seen.add(cursor);
+
+    const turn = row.get(cursor, userId) as
+      | { user_turn: string | null; recipe_json: string | null; parent_turn_id: string | null }
+      | undefined;
+    if (!turn) break;
+
+    if (turn.user_turn && turn.recipe_json) {
+      chain.push({ userTurn: turn.user_turn, recipeJson: turn.recipe_json });
+    }
+    cursor = turn.parent_turn_id;
+  }
+
+  return chain.reverse();
 }
 
 export interface TurnCompletion extends CallUsage {
