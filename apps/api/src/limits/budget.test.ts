@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { db, upsertUser } from "../db/index.js";
+import { db, upsertUser, getPreferences } from "../db/index.js";
 import { budgetFor, globalBudget, inFlight, reserve, __resetLeases } from "./budget.js";
-import { decide } from "./middleware.js";
+import { decide } from "./policy.js";
 
 /**
  * These run against a real SQLite file, not a mock.
@@ -184,5 +184,27 @@ describe("decide — the admission policy", () => {
     const r = decide(u);
     expect(r?.message).toMatch(/today/i);
     expect(r?.detail).toContain("$1.0000");
+  });
+});
+
+describe("getPreferences — stale cookware", () => {
+  it("drops values that are no longer in the Equipment enum", () => {
+    // Regression: "sous vide" sat in a real database, couldn't render as a
+    // button (the UI maps over APPLIANCES), and so was echoed back on every
+    // save and rejected by the enum — an error the user could not clear.
+    const u = newUser();
+    db.prepare(
+      `INSERT INTO preferences (user_id, dislikes, dietary, cookware) VALUES (?, '[]', '[]', ?)`,
+    ).run(u, JSON.stringify(["sous vide", "oven", "stovetop"]));
+
+    expect(getPreferences(u).cookware).toEqual(["oven", "stovetop"]);
+  });
+
+  it("survives a malformed cookware column rather than throwing", () => {
+    const u = newUser();
+    db.prepare(
+      `INSERT INTO preferences (user_id, dislikes, dietary, cookware) VALUES (?, '[]', '[]', 'not json')`,
+    ).run(u);
+    expect(getPreferences(u).cookware).toEqual([]);
   });
 });
