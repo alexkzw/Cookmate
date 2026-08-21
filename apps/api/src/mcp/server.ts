@@ -90,7 +90,10 @@ const server = new McpServer(
       "Every recipe is checked by a deterministic verifier after generation, and " +
       "the verdict is returned alongside it — read it rather than assuming the " +
       "recipe is achievable. Call get_pantry before suggesting anything; the " +
-      "pantry is server-owned and cannot be supplied in the request.",
+      "pantry is server-owned and cannot be supplied in the request. It is read " +
+      "fresh on every call, so a get_pantry result from earlier in a long " +
+      "conversation may be out of date — `suggest_recipe` returns the evidence " +
+      "it actually used in `groundedIn`, and that is the authority.",
   },
 );
 
@@ -173,11 +176,33 @@ server.registerTool(
       "deterministically and return both. The verification is the point: it " +
       "recomputes every claim the model made about what's in the pantry, so " +
       "`verification.ok === false` means the recipe genuinely does not fit and " +
-      "the violations say exactly how. Costs real money and takes ~30 seconds.",
+      "the violations say exactly how. Costs real money and takes ~30 seconds.\n\n" +
+      "The pantry, dislikes, dietary needs and appliances are read from the " +
+      "database AT CALL TIME and cannot be passed in — they are the evidence the " +
+      "recipe is judged against. They may differ from an earlier get_pantry " +
+      "result if the person edited their kitchen since. The `groundedIn` field " +
+      "in the response is the evidence actually used: trust it over anything " +
+      "read earlier in the conversation.",
     inputSchema: SuggestInput,
     outputSchema: {
       recipe: RecipeSchema,
       verification: VerificationSchema,
+      /**
+       * The evidence this recipe was actually judged against.
+       *
+       * Returned because an MCP conversation is long-lived and the database is
+       * not frozen: a client that called get_pantry ten minutes ago may be
+       * holding a stale snapshot, and without this it cannot tell "the kitchen
+       * changed" from "the tool is lying". Echoing the evidence makes the
+       * response self-describing — the same reason the verifier reports what it
+       * resolved rather than only whether it passed.
+       */
+      groundedIn: z.object({
+        pantry: z.array(z.string()),
+        cookware: z.array(z.string()),
+        dislikes: z.array(z.string()),
+        dietary: z.array(z.string()),
+      }),
       attempts: z.number(),
       costUsd: z.number(),
     },
@@ -225,8 +250,24 @@ server.registerTool(
       });
 
       const v = result.verification;
+      const groundedIn = {
+        pantry: request.pantry,
+        cookware: request.cookware as string[],
+        dislikes: request.dislikes,
+        dietary: request.dietary,
+      };
+
       const summary = [
         `${result.recipe.title} — ${result.recipe.summary}`,
+        ``,
+        // Stated first and in prose, not just in the structured payload: a
+        // client reading only the text must still see what this was judged
+        // against, or it will compare against whatever it remembers.
+        `Grounded in the kitchen as it is RIGHT NOW — pantry: ` +
+          `${groundedIn.pantry.join(", ") || "empty"}` +
+          (groundedIn.dietary.length ? ` · dietary: ${groundedIn.dietary.join(", ")}` : "") +
+          (groundedIn.dislikes.length ? ` · dislikes: ${groundedIn.dislikes.join(", ")}` : "") +
+          `. If that differs from an earlier get_pantry, the kitchen was edited since.`,
         ``,
         v.ok
           ? `VERIFIED: fits this kitchen. ${v.activeMinutes} min hands-on of ${v.totalMinutes} total.`
@@ -245,6 +286,7 @@ server.registerTool(
         structuredContent: {
           recipe: result.recipe,
           verification: v,
+          groundedIn,
           attempts: result.attempts,
           costUsd: result.usage.costUsd,
         },
