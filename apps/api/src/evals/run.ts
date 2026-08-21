@@ -3,6 +3,21 @@ import { getFixtures, fixtureSetHash, FIXTURES } from "./fixtures.js";
 import { runSuite } from "./runner.js";
 import { replaySuite, latestScorableSuite, DuplicateReplayError } from "./replay.js";
 import {
+  JUDGE_MODEL,
+  judgePromptHash,
+  judgeRecipe,
+  recordJudgement,
+  recordHumanLabel,
+  unjudgedRows,
+  unlabelledRows,
+  calibration,
+  lengthBias,
+  judgeByCondition,
+} from "./judge.js";
+import { getFixtures as fixturesById } from "./fixtures.js";
+import type { Recipe } from "@cookmate/shared";
+import { createInterface } from "node:readline/promises";
+import {
   summariseByCondition,
   summariseByFixture,
   summariseByKind,
@@ -28,6 +43,10 @@ import {
  *   pnpm eval --report --all           print every run ever recorded
  *   pnpm eval --yes                    skip the cost confirmation
  *
+ *   pnpm eval --judge                  score stored recipes for QUALITY (cheap)
+ *   pnpm eval --label                  record your own scores, to calibrate it
+ *   pnpm eval --judge-report           agreement + length-bias probe
+ *
  * Model and effort come from .env, so sweeping a condition is the same
  * workflow as the manual sweep — edit .env, run again, compare.
  */
@@ -36,7 +55,12 @@ const argv = process.argv.slice(2);
 const flag = (name: string) => argv.includes(`--${name}`);
 const value = (name: string): string | undefined => {
   const i = argv.indexOf(`--${name}`);
-  return i >= 0 ? argv[i + 1] : undefined;
+  if (i < 0) return undefined;
+  const next = argv[i + 1];
+  // `--judge --yes` must not read "--yes" as a suite id. Optional-argument
+  // flags sit next to boolean ones, so the next token is only a value if it
+  // isn't itself a flag.
+  return next !== undefined && !next.startsWith("--") ? next : undefined;
 };
 
 const fmtUsd = (n: number) => `$${n.toFixed(4)}`;
@@ -123,6 +147,167 @@ function report(suiteId?: string): void {
   console.log();
 }
 
+
+const fmtSigned = (n: number) => (n >= 0 ? `+${n.toFixed(2)}` : n.toFixed(2));
+
+function judgeReport(suiteId?: string): void {
+  console.log(`\n=== quality judge · ${JUDGE_MODEL} · prompt ${judgePromptHash()} ===\n`);
+
+  const byCondition = judgeByCondition(suiteId);
+  if (byCondition.length === 0) {
+    console.log("Nothing judged yet. Run `pnpm eval --judge` first.\n");
+    return;
+  }
+
+  console.log("QUALITY BY ARM — what the verifier's pass rate cannot tell you");
+  console.table(
+    byCondition.map((r) => ({
+      model: r.model,
+      repair: r.repair === null ? "?" : r.repair ? "on" : "off",
+      n: r.n,
+      appeal: r.appeal.toFixed(2),
+      technique: r.technique.toFixed(2),
+      clarity: r.clarity.toFixed(2),
+      overall: r.overall.toFixed(2),
+    })),
+  );
+
+  // CALIBRATION — the number that decides whether anything above is meaningful.
+  const cal = calibration();
+  console.log("\nCALIBRATION — does the judge agree with a human?");
+  if (!cal) {
+    console.log("  (no human labels yet — run `pnpm eval --label`)");
+    console.log("  Until then, treat every score above as unvalidated.");
+  } else {
+    console.log(`  labelled            : ${cal.n}`);
+    console.log(`  exact agreement     : ${cal.exact}/${cal.n} (${pct(cal.exact / cal.n)})`);
+    console.log(`  within 1 point      : ${cal.within1}/${cal.n} (${pct(cal.within1 / cal.n)})`);
+    console.log(`  mean absolute error : ${cal.meanAbsError.toFixed(2)} points`);
+    console.log(`  judge mean          : ${cal.judgeMean.toFixed(2)}`);
+    console.log(`  human mean          : ${cal.humanMean.toFixed(2)}  (bias ${fmtSigned(cal.judgeMean - cal.humanMean)})`);
+    console.log(`  correlation         : ${cal.correlation === null ? "n/a" : cal.correlation.toFixed(2)}`);
+    if (cal.n < 10) console.log(`  NOTE: ${cal.n} labels is too few to conclude much. Aim for 15.`);
+    else if (cal.meanAbsError > 1) console.log("  WARNING: the judge is off by more than a point on average. Don't quote its scores.");
+  }
+
+  // LENGTH BIAS — the best-documented judge failure, and the easiest to test.
+  const bias = lengthBias(suiteId);
+  console.log("\nLENGTH-BIAS PROBE — is the judge rewarding verbosity?");
+  if (!bias) {
+    console.log("  (not enough judged rows with token counts)");
+  } else {
+    console.log(`  n                   : ${bias.n}`);
+    console.log(`  score vs output_tokens correlation : ${bias.correlation === null ? "n/a" : bias.correlation.toFixed(2)}`);
+    console.log(`  shorter than median (${bias.medianTokens} tok) : ${bias.shortMean.toFixed(2)}`);
+    console.log(`  longer  than median             : ${bias.longMean.toFixed(2)}`);
+    const gap = bias.longMean - bias.shortMean;
+    console.log(`  gap                 : ${fmtSigned(gap)}`);
+    if (bias.correlation !== null && bias.correlation > 0.4) {
+      console.log("  WARNING: strong positive correlation — the judge is partly grading length.");
+    } else {
+      console.log("  No strong length effect. (Not proof — longer recipes may genuinely be better.)");
+    }
+  }
+  console.log();
+}
+
+async function runJudge(suiteId: string | undefined, yes: boolean): Promise<void> {
+  const rows = unjudgedRows(suiteId);
+  if (rows.length === 0) {
+    console.log("\nEverything is already judged by this model and prompt.\n");
+    return judgeReport(suiteId);
+  }
+
+  // Judging re-reads stored recipes, so it never asks the model to generate —
+  // the only cost is the judge itself, on the cheapest tier.
+  console.log(
+    `\n${rows.length} stored recipes to judge · ${JUDGE_MODEL} · prompt ${judgePromptHash()}\n` +
+      `estimated cost ≈ ${fmtUsd(rows.length * 0.0015)} (no generations — stored recipes only)\n`,
+  );
+  if (!yes) {
+    console.log("Add --yes to run. Nothing has been spent.\n");
+    return;
+  }
+
+  let spent = 0;
+  let done = 0;
+  for (const row of rows) {
+    done += 1;
+    const fixture = fixturesById([row.fixture_id])[0];
+    if (!fixture) {
+      console.log(`[${done}/${rows.length}] ${row.fixture_id} — fixture gone, skipped`);
+      continue;
+    }
+    try {
+      const recipe = JSON.parse(row.recipe_json) as Recipe;
+      const verdict = await judgeRecipe(recipe, fixture.request);
+      recordJudgement(row.id, verdict);
+      spent += verdict.costUsd;
+      console.log(
+        `[${done}/${rows.length}] ${row.fixture_id} #${row.repeat_index + 1}  ` +
+          `overall ${verdict.overall.toFixed(2)} ` +
+          `(a${verdict.appeal} t${verdict.technique} c${verdict.clarity})  ${verdict.reason}`,
+      );
+    } catch (err) {
+      console.log(`[${done}/${rows.length}] ${row.fixture_id} ERROR: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+  console.log(`\ndone · ${fmtUsd(spent)} spent\n`);
+  judgeReport(suiteId);
+}
+
+/**
+ * Record your own scores.
+ *
+ * You grade blind on purpose: the judge's score for the recipe in front of you
+ * is never shown. Seeing it first would anchor you, and the agreement number
+ * would then be measuring your suggestibility rather than the judge's accuracy.
+ */
+async function runLabel(): Promise<void> {
+  const rows = unlabelledRows();
+  if (rows.length === 0) {
+    console.log("\nNothing left to label. Run `pnpm eval --judge` first, or you're done.\n");
+    return;
+  }
+
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  console.log(
+    `\n${rows.length} recipes to grade. 1–5 for overall quality, blank to skip, q to stop.\n` +
+      `  1 = wouldn't cook it   3 = fine   5 = would recommend without qualification\n` +
+      `You are NOT checking achievability — the verifier already does that.\n`,
+  );
+
+  let labelled = 0;
+  for (const row of rows) {
+    const recipe = JSON.parse(row.recipe_json) as Recipe;
+    console.log(`\n${"─".repeat(64)}`);
+    console.log(`${row.fixture_id} #${row.repeat_index + 1} — ${recipe.title}`);
+    console.log(recipe.summary);
+    console.log(`\ningredients: ${recipe.ingredients.map((i) => i.name).join(", ")}`);
+    console.log("steps:");
+    for (const step of recipe.steps) {
+      console.log(`  ${step.number}. ${step.instruction} (${step.minutes}m${step.handsOff ? ", hands-off" : ""})`);
+    }
+    if (recipe.tips.length > 0) console.log(`tips: ${recipe.tips.join(" · ")}`);
+
+    const answer = (await rl.question("\nyour score (1-5): ")).trim().toLowerCase();
+    if (answer === "q") break;
+    if (answer === "") continue;
+
+    const score = Number(answer);
+    if (!Number.isInteger(score) || score < 1 || score > 5) {
+      console.log("  not 1-5 — skipped");
+      continue;
+    }
+    recordHumanLabel(row.id, score);
+    labelled += 1;
+  }
+
+  rl.close();
+  console.log(`\nrecorded ${labelled} label(s).\n`);
+  if (labelled > 0) judgeReport();
+}
+
 async function main(): Promise<void> {
   // Re-score stored recipes under the current verifier. Costs nothing: the
   // generations already happened, and only the scorer changed.
@@ -159,6 +344,21 @@ async function main(): Promise<void> {
       console.log(`    ${c.fixtureId} #${c.repeatIndex + 1}: ${c.was} -> ${c.now}`);
 
     report(r.suiteId);
+    return;
+  }
+
+  if (flag("judge-report")) {
+    judgeReport(flag("all") ? undefined : latestSuiteId());
+    return;
+  }
+
+  if (flag("label")) {
+    await runLabel();
+    return;
+  }
+
+  if (flag("judge")) {
+    await runJudge(flag("all") ? undefined : (value("judge") ?? latestScorableSuite()), flag("yes"));
     return;
   }
 
