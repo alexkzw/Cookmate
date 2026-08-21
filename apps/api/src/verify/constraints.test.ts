@@ -19,6 +19,24 @@ const baseRequest: CookRequest = {
   cookware: ["stovetop", "oven"],
 };
 
+type Ing = Recipe["ingredients"][number];
+
+/**
+ * Fixture builder. `matchTerm` defaults to `name`, which is what the old
+ * single-field fixtures meant — so these tests keep asserting the same
+ * behaviour, and the cases where the two fields differ are written explicitly.
+ */
+function ing(
+  name: string,
+  quantity: number,
+  unit: Ing["unit"],
+  source: Ing["source"],
+  substitute: string | null = null,
+  matchTerm: string = name,
+): Ing {
+  return { name, matchTerm, quantity, unit, source, substitute };
+}
+
 function recipe(overrides: Partial<Recipe> = {}): Recipe {
   return {
     title: "Quick chicken rice",
@@ -29,10 +47,10 @@ function recipe(overrides: Partial<Recipe> = {}): Recipe {
     cookMinutes: 15,
     difficulty: "easy",
     ingredients: [
-      { name: "chicken thigh", quantity: 300, unit: "g", source: "pantry", substitute: null },
-      { name: "onion", quantity: 1, unit: "piece", source: "pantry", substitute: null },
-      { name: "rice", quantity: 200, unit: "g", source: "pantry", substitute: null },
-      { name: "salt", quantity: 0, unit: "to_taste", source: "staple", substitute: null },
+      ing("chicken thigh", 300, "g", "pantry"),
+      ing("onion", 1, "piece", "pantry"),
+      ing("rice", 200, "g", "pantry"),
+      ing("salt", 0, "to_taste", "staple"),
     ],
     steps: [
       {
@@ -143,7 +161,7 @@ describe("verifyRecipe", () => {
     const r = recipe({
       ingredients: [
         ...recipe().ingredients,
-        { name: "gochujang", quantity: 2, unit: "tbsp", source: "pantry", substitute: "sriracha" },
+        ing("gochujang", 2, "tbsp", "pantry", "sriracha"),
       ],
     });
     const result = verifyRecipe(r, baseRequest);
@@ -157,7 +175,7 @@ describe("verifyRecipe", () => {
     // verifier is that this assertion carries no weight.
     const r = recipe({
       ingredients: [
-        { name: "fish sauce", quantity: 1, unit: "tbsp", source: "pantry", substitute: null },
+        ing("fish sauce", 1, "tbsp", "pantry"),
       ],
     });
     const result = verifyRecipe(r, { ...baseRequest, willShop: false });
@@ -169,7 +187,7 @@ describe("verifyRecipe", () => {
     const r = recipe({
       ingredients: [
         ...recipe().ingredients,
-        { name: "gochujang", quantity: 2, unit: "tbsp", source: "shopping", substitute: null },
+        ing("gochujang", 2, "tbsp", "shopping"),
       ],
     });
     const result = verifyRecipe(r, { ...baseRequest, willShop: true });
@@ -204,7 +222,7 @@ describe("verifyRecipe", () => {
     const r = recipe({
       ingredients: [
         ...recipe().ingredients,
-        { name: "coriander", quantity: 1, unit: "pinch", source: "shopping", substitute: null },
+        ing("coriander", 1, "pinch", "shopping"),
       ],
     });
     expect(verifyRecipe(r, baseRequest).violations.map((v) => v.kind)).toContain(
@@ -386,8 +404,8 @@ describe("regression: eval-discovered false positives", () => {
       };
       const r = recipe({
         ingredients: [
-          { name: "tinned tomato", quantity: 400, unit: "g", source: "pantry", substitute: null },
-          { name: "pasta", quantity: 200, unit: "g", source: "pantry", substitute: null },
+          ing("tinned tomato", 400, "g", "pantry"),
+          ing("pasta", 200, "g", "pantry"),
         ],
       });
       const result = verifyRecipe(r, request);
@@ -409,7 +427,7 @@ describe("regression: eval-discovered false positives", () => {
       for (const milk of ["coconut milk", "almond milk", "soy milk"]) {
         const r = recipe({
           ingredients: [
-            { name: milk, quantity: 400, unit: "ml", source: "pantry", substitute: null },
+            ing(milk, 400, "ml", "pantry"),
           ],
         });
         const result = verifyRecipe(r, request);
@@ -422,7 +440,7 @@ describe("regression: eval-discovered false positives", () => {
       const request: CookRequest = { ...baseRequest, dietary: ["dairy-free"], dislikes: [] };
       const r = recipe({
         ingredients: [
-          { name: "butter", quantity: 40, unit: "g", source: "staple", substitute: null },
+          ing("butter", 40, "g", "staple"),
         ],
       });
       const result = verifyRecipe(r, request);
@@ -438,8 +456,8 @@ describe("regression: eval-discovered false positives", () => {
       };
       const r = recipe({
         ingredients: [
-          { name: "soy sauce", quantity: 2, unit: "tbsp", source: "pantry", substitute: null },
-          { name: "fish sauce", quantity: 1, unit: "tbsp", source: "pantry", substitute: null },
+          ing("soy sauce", 2, "tbsp", "pantry"),
+          ing("fish sauce", 1, "tbsp", "pantry"),
         ],
       });
       const kinds = verifyRecipe(r, request).violations.map((v) => v.kind);
@@ -457,7 +475,7 @@ describe("regression: eval-discovered false positives", () => {
       };
       const r = recipe({
         ingredients: [
-          { name: "gochujang", quantity: 1, unit: "tbsp", source: "pantry", substitute: null },
+          ing("gochujang", 1, "tbsp", "pantry"),
         ],
       });
       const result = verifyRecipe(r, request);
@@ -471,5 +489,67 @@ describe("regression: eval-discovered false positives", () => {
       const result = verifyRecipe(recipe(), request);
       expect(result.uncertain.length).toBeGreaterThan(0);
     });
+  });
+});
+
+describe("display name vs match key", () => {
+  it("matches on matchTerm, not on the prose name", () => {
+    // The whole point of the split: the card can say "ripe tomatoes, diced"
+    // while the verifier resolves "tomato" against the pantry.
+    const request: CookRequest = { ...baseRequest, pantry: ["tomatoes"], willShop: false };
+    const r = recipe({
+      ingredients: [ing("ripe tomatoes, finely diced", 3, "piece", "pantry", null, "tomato")],
+      steps: [
+        {
+          number: 1,
+          instruction: "Dice the tomatoes.",
+          minutes: 5,
+          handsOff: false,
+          equipment: ["knife"],
+          uses: ["tomato"],
+        },
+      ],
+      prepMinutes: 5,
+      cookMinutes: 0,
+    });
+    const result = verifyRecipe(r, request);
+    expect(result.violations.map((v) => v.kind)).not.toContain("missing_ingredient");
+  });
+
+  it("reports the display name, so the user reads prose rather than a key", () => {
+    const request: CookRequest = { ...baseRequest, pantry: [], willShop: false };
+    const r = recipe({
+      ingredients: [ing("ripe tomatoes, finely diced", 3, "piece", "shopping", null, "tomato")],
+    });
+    const result = verifyRecipe(r, request);
+    const missing = result.violations.find((v) => v.kind === "missing_ingredient");
+    expect(missing?.detail).toContain("ripe tomatoes, finely diced");
+  });
+
+  it("falls back to name when matchTerm is absent — old stored recipes stay scoreable", () => {
+    // Replay reads recipe_json straight from the database. A row written before
+    // matchTerm existed must not silently stop resolving.
+    const request: CookRequest = { ...baseRequest, pantry: ["tomatoes"], willShop: false };
+    const legacy = recipe({ ingredients: [ing("tomato", 3, "piece", "pantry")] });
+    delete (legacy.ingredients[0] as Partial<Ing>).matchTerm;
+
+    const result = verifyRecipe(legacy, request);
+    expect(result.violations.map((v) => v.kind)).not.toContain("missing_ingredient");
+  });
+
+  it("an empty matchTerm degrades to the display name rather than resolving nothing", () => {
+    const request: CookRequest = { ...baseRequest, pantry: ["tomatoes"], willShop: false };
+    const r = recipe({ ingredients: [ing("tomato", 3, "piece", "pantry", null, "   ")] });
+    const result = verifyRecipe(r, request);
+    expect(result.violations.map((v) => v.kind)).not.toContain("missing_ingredient");
+  });
+
+  it("keeps the specificity that stops coconut milk matching coconut", () => {
+    const request: CookRequest = { ...baseRequest, pantry: ["coconut"], willShop: false };
+    const r = recipe({
+      ingredients: [ing("full-fat coconut milk", 400, "ml", "pantry", null, "coconut milk")],
+    });
+    const result = verifyRecipe(r, request);
+    expect(result.violations.map((v) => v.kind)).toContain("missing_ingredient");
   });
 });
