@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import type { Equipment } from "@cookmate/shared";
+import { EquipmentSchema, type Equipment } from "@cookmate/shared";
 import { config } from "../config.js";
 
 /**
@@ -119,6 +119,17 @@ addColumnIfMissing("turns", "attempts", "INTEGER");
 // failure mode stays visible after the loop has quietly cleaned it up.
 addColumnIfMissing("turns", "first_pass_ok", "INTEGER");
 addColumnIfMissing("turns", "first_pass_verification_json", "TEXT");
+// The user turn exactly as it was rendered into the prompt.
+//
+// Without it, "the model ignored the pantry" and "the pantry never reached the
+// model" are indistinguishable after the fact — and the second one is a bug
+// this project has actually shipped. pantry_json records what we MEANT to send;
+// this records what we DID send, and the gap between those two is where that
+// class of bug lives.
+addColumnIfMissing("turns", "user_turn", "TEXT");
+// The turn this one is a follow-up to. Walking the chain rebuilds the
+// conversation history; null means this is the first turn.
+addColumnIfMissing("turns", "parent_turn_id", "TEXT");
 
 export function upsertUser(id: string, email: string | null, displayName: string | null): void {
   db.prepare(
@@ -156,6 +167,31 @@ export interface Preferences {
   cookware: Equipment[];
 }
 
+/**
+ * Drop cookware values that are no longer in the Equipment enum.
+ *
+ * The enum is validated on the way IN, so this only catches rows written before
+ * a value was removed from the vocabulary — but the failure it prevents is
+ * nasty. An unknown value can't render as a button (the UI maps over
+ * APPLIANCES), so it sits invisibly in React state, gets sent back on every
+ * save, and is rejected by the enum on the way in. The user sees "invalid
+ * option" for something they cannot see, let alone untick.
+ *
+ * Filtering on read makes it self-healing: the bad value never reaches the
+ * client, so the next save persists the cleaned list. The alternative — a
+ * one-off migration — fixes today's stale value and not the next one.
+ */
+function readCookware(raw: string): Equipment[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed.filter((item): item is Equipment => EquipmentSchema.safeParse(item).success);
+}
+
 export function getPreferences(userId: string): Preferences {
   const row = db
     .prepare(`SELECT dislikes, dietary, cookware FROM preferences WHERE user_id = ?`)
@@ -164,7 +200,7 @@ export function getPreferences(userId: string): Preferences {
   return {
     dislikes: JSON.parse(row.dislikes) as string[],
     dietary: JSON.parse(row.dietary) as string[],
-    cookware: JSON.parse(row.cookware) as Equipment[],
+    cookware: readCookware(row.cookware),
   };
 }
 
