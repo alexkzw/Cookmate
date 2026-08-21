@@ -12,7 +12,14 @@ import { authHeaders } from "../lib/api";
 export type CookRequestInput = Omit<
   CookRequest,
   "pantry" | "dislikes" | "dietary" | "cookware"
->;
+> & {
+  /**
+   * Continue an existing conversation. `craving` is then read as a follow-up
+   * ("make it faster") and the server replays the prior turns to the model.
+   * The reply is still a full, freshly verified recipe — not chat.
+   */
+  followUpTo?: string;
+};
 
 /**
  * Consumes the SSE stream from POST /api/chat/stream.
@@ -86,6 +93,25 @@ export function useRecipeStream() {
   const abortRef = useRef<AbortController | null>(null);
 
   const reset = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setState(EMPTY);
+  }, []);
+
+  /**
+   * Stop an in-flight generation.
+   *
+   * Aborting the fetch propagates all the way down: the signal is handed to the
+   * Anthropic SDK on the server, so the model call is cancelled rather than
+   * left running and discarded. The route's `finally` still releases the budget
+   * lease and the turn is still recorded, so a cancelled request is visible in
+   * the telemetry rather than vanishing.
+   *
+   * Deliberately "stop", not "pause" — a stream cannot be resumed. The tokens
+   * are gone, and pretending otherwise would promise something the transport
+   * cannot deliver.
+   */
+  const cancel = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
     setState(EMPTY);
@@ -183,5 +209,5 @@ export function useRecipeStream() {
     }
   }, []);
 
-  return { state, start, reset };
+  return { state, start, reset, cancel };
 }
