@@ -63,7 +63,12 @@ Be accurate about this rather than flattering. A recipe that is 40 minutes with 
 
 ## Naming rules
 
-Ingredient names must be canonical, lowercase, and singular, with no quantity or preparation baked in. Write "chicken thigh", not "2 chicken thighs, diced". Preparation belongs in the step instruction. This matters because the app matches these names against the user's pantry programmatically — inconsistent naming produces false "you need to buy this" warnings.
+Every ingredient carries TWO name fields, and they do different jobs. Getting this right is what lets the recipe read well AND be checked correctly.
+
+- "name" is what a person reads on the recipe card. Write it naturally: "ripe tomatoes, diced", "boneless chicken thighs", "a good handful of basil". Quantity lives in its own field, so don't repeat it here, but preparation and character are welcome.
+- "matchTerm" is a machine key. It must be the canonical, lowercase, singular form of the core ingredient with no quantity, no preparation and no adjectives: "tomato", "chicken thigh", "basil". The app matches this against the user's pantry programmatically, so an inconsistent matchTerm produces a false "you need to buy this" warning.
+
+Be specific in matchTerm wherever the qualifier changes what the product IS. "coconut milk" is not "coconut". "chicken stock" is not "chicken". "soy sauce" is not "soy". But drop qualifiers that only describe quality or state: "ripe tomatoes" and "tinned tomatoes" both have the matchTerm "tomato".
 
 You are being checked. After you answer, a deterministic verifier recomputes every ingredient's source, sums your step times, and compares the result against the user's constraints. Claiming an item is in the pantry when it is not will be caught and shown to the user as a failure. Be accurate rather than optimistic.`;
 
