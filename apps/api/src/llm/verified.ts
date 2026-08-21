@@ -3,6 +3,7 @@ import { verifyRecipe } from "../verify/constraints.js";
 import { streamRecipe } from "./generate.js";
 import { buildRepairTurn } from "./repair.js";
 import type { CallUsage } from "./models.js";
+import type { ConversationTurn } from "../telemetry/turns.js";
 
 /**
  * GENERATE, VERIFY, AND REPAIR ONCE.
@@ -68,9 +69,16 @@ export async function generateVerifiedRecipe(
     repair?: boolean;
     signal?: AbortSignal;
     onRepairStart?: (issues: string[]) => void;
+    /**
+     * Prior turns, oldest first. Passed straight through to both attempts —
+     * a repair must see the same conversation the first attempt saw, or it is
+     * answering a different question.
+     */
+    history?: ConversationTurn[];
   } = {},
 ): Promise<VerifiedGeneration> {
-  const first = await streamRecipe(request, onTextDelta, options.signal);
+  const history = options.history ?? [];
+  const first = await streamRecipe(request, onTextDelta, options.signal, { history });
   const firstVerification = verifyRecipe(first.recipe, request);
   const firstPassKinds = [...new Set(firstVerification.violations.map((v) => v.kind))].sort();
 
@@ -90,7 +98,10 @@ export async function generateVerifiedRecipe(
   options.onRepairStart?.(firstVerification.violations.map((v) => v.detail));
 
   const repairPrompt = buildRepairTurn(request, first.recipe, firstVerification);
-  const second = await streamRecipe(request, onTextDelta, options.signal, repairPrompt);
+  const second = await streamRecipe(request, onTextDelta, options.signal, {
+    userTurnOverride: repairPrompt,
+    history,
+  });
   const secondVerification = verifyRecipe(second.recipe, request);
   const usage = combine(first.usage, second.usage);
 
