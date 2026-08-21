@@ -10,12 +10,14 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "eval": "tsx --env-file=../../.env src/evals/run.ts",
-    "measure:limits": "tsx --env-file=../../.env scripts/measure-limits.ts"
+    "measure:limits": "tsx --env-file=../../.env scripts/measure-limits.ts",
+    "mcp": "tsx --env-file=../../.env src/mcp/server.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.116.0",
     "@cookmate/shared": "workspace:*",
     "@hono/node-server": "^1.13.7",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "better-sqlite3": "^11.7.0",
     "hono": "^4.6.14",
     "jose": "^5.9.6",
