@@ -29,6 +29,11 @@ const EnvSchema = z.object({
   // unknown. Pessimistic on purpose: ~$0.046 measured for sonnet + repair.
   ESTIMATED_TURN_COST_USD: z.coerce.number().positive().default(0.06),
 
+  // Whose kitchen the MCP server speaks for. There is no per-call identity
+  // over stdio — the server is a subprocess of one client, acting as one
+  // person — so this is configuration, never a tool argument.
+  MCP_USER_ID: z.string().min(1).optional(),
+
   SUPABASE_URL: z.string().url().optional(),
   SUPABASE_JWKS_URL: z.string().url().optional(),
 
