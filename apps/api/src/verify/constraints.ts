@@ -130,6 +130,20 @@ function matchesDislike(ingredientName: string, dislikes: string[]): string | nu
   return null;
 }
 
+/**
+ * The key to resolve an ingredient by, as distinct from how it is displayed.
+ *
+ * Falls back to `name` because recipes generated before `matchTerm` existed are
+ * still stored and still replayable — an eval row from last week must not stop
+ * scoring because the schema grew a field. An empty string is treated as absent
+ * for the same reason: a model that emits `""` should degrade to the old
+ * behaviour rather than resolve nothing.
+ */
+function matchKey(ing: Recipe["ingredients"][number]): string {
+  const term = ing.matchTerm?.trim();
+  return term && term.length > 0 ? term : ing.name;
+}
+
 export function verifyRecipe(recipe: Recipe, request: CookRequest): Verification {
   const violations: Violation[] = [];
   const uncertain = new Set<string>();
@@ -138,7 +152,10 @@ export function verifyRecipe(recipe: Recipe, request: CookRequest): Verification
   let pantryUsedCount = 0;
 
   for (const ing of recipe.ingredients) {
-    const actual = resolveSource(ing.name, pantryIndex);
+    // Resolve on the canonical key, report with the display name. The user
+    // reads "ripe tomatoes, diced"; the verifier matches "tomato".
+    const key = matchKey(ing);
+    const actual = resolveSource(key, pantryIndex);
 
     if (actual === "pantry" || actual === "staple") pantryUsedCount += 1;
     if (actual === "shopping") {
@@ -153,7 +170,7 @@ export function verifyRecipe(recipe: Recipe, request: CookRequest): Verification
       }
     }
 
-    const disliked = matchesDislike(ing.name, request.dislikes);
+    const disliked = matchesDislike(key, request.dislikes);
     if (disliked !== null) {
       violations.push({
         kind: "disliked_ingredient",
@@ -163,7 +180,7 @@ export function verifyRecipe(recipe: Recipe, request: CookRequest): Verification
     }
 
     for (const tag of request.dietary) {
-      const verdict = violatesDietary(ing.name, tag);
+      const verdict = violatesDietary(key, tag);
       if (verdict === true) {
         violations.push({
           kind: "dietary_conflict",
