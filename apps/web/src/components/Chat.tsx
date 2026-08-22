@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertCircle, Sparkles, Square, CornerDownLeft } from "lucide-react";
+import { AlertCircle, Sparkles, CornerDownLeft } from "lucide-react";
 import { useRecipeStream, type CookRequestInput } from "../hooks/useRecipeStream";
 import { CookForm } from "./CookForm";
 import { RecipeCard } from "./RecipeCard";
@@ -41,18 +41,7 @@ export function Chat({ showUsage }: { showUsage: boolean }) {
   return (
     <main className="mx-auto grid max-w-6xl gap-6 px-6 py-8 lg:grid-cols-[1fr_320px]">
       <div className="space-y-6">
-        <CookForm onSubmit={onSubmit} busy={busy} compact={hasResult} />
-
-        {busy && (
-          <button
-            type="button"
-            onClick={cancel}
-            className="flex items-center gap-2 rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-200"
-          >
-            <Square className="h-3.5 w-3.5 fill-current" />
-            Stop
-          </button>
-        )}
+        <CookForm onSubmit={onSubmit} onCancel={cancel} busy={busy} compact={hasResult} />
 
         {state.phase === "error" && (
           <div className="flex items-start gap-3 rounded-xl bg-red-50 p-4 text-sm text-red-800 ring-1 ring-red-200">

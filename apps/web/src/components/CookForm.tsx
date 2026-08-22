@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Sparkles, Loader2 } from "lucide-react";
+import { Sparkles, Loader2, Square } from "lucide-react";
 import clsx from "clsx";
 import { EFFORT_LEVELS, type CookRequest } from "@cookmate/shared";
 
@@ -9,7 +9,7 @@ export type CookFormValues = Omit<
   "pantry" | "dislikes" | "dietary" | "cookware"
 >;
 
-const TIME_PRESETS = [15, 30, 45, 90] as const;
+const TIME_PRESETS = [15, 30, 45, 60, 90] as const;
 
 /**
  * The composer. Modelled on the reference screenshot: one prompt line plus the
@@ -20,10 +20,17 @@ const TIME_PRESETS = [15, 30, 45, 90] as const;
  */
 export function CookForm({
   onSubmit,
+  onCancel,
   busy,
   compact = false,
 }: {
   onSubmit: (req: CookFormValues) => void;
+  /**
+   * Stop an in-flight generation. Lives here rather than beside the recipe
+   * because the action a user wants is "undo what I just pressed", and that
+   * belongs next to the button they pressed.
+   */
+  onCancel?: () => void;
   busy: boolean;
   compact?: boolean;
 }) {
@@ -122,14 +129,27 @@ export function CookForm({
           I can pop to the shop
         </label>
 
-        <button
-          type="submit"
-          disabled={busy || !craving.trim()}
-          className="ml-auto inline-flex items-center gap-2 rounded-lg bg-brand-600 px-5 py-2 font-medium text-white transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
-        >
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-          {busy ? "Cooking up…" : "Find me something"}
-        </button>
+        <div className="ml-auto flex items-center gap-2">
+          {busy && onCancel && (
+            <button
+              type="button"
+              onClick={onCancel}
+              className="inline-flex items-center gap-2 rounded-lg bg-slate-100 px-4 py-2 font-medium text-slate-600 transition hover:bg-slate-200"
+            >
+              <Square className="h-3.5 w-3.5 fill-current" />
+              Stop
+            </button>
+          )}
+
+          <button
+            type="submit"
+            disabled={busy || !craving.trim()}
+            className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-5 py-2 font-medium text-white transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            {busy ? "Cooking up…" : "Find me something"}
+          </button>
+        </div>
       </div>
     </form>
   );
