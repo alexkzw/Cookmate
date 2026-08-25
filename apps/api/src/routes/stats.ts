@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Stats } from "@cookmate/shared";
 import { db } from "../db/index.js";
 import { recentLimitEvents } from "../limits/budget.js";
+import { severityOf } from "../llm/errors.js";
 
 export const statsRoutes = new Hono();
 
@@ -78,15 +79,49 @@ statsRoutes.get("/", (c) => {
     WHERE recipe_json IS NOT NULL
   `);
 
+  /**
+   * FAILURE RATE, AND THE TAXONOMY UNDERNEATH IT.
+   *
+   * `failTurn` has written `error_code` since error classification shipped, but
+   * nothing ever read it back — so every failure was recorded and none was
+   * reported. A number you collect and never surface is indistinguishable from
+   * one you never collected, right up until someone asks how reliable the
+   * system is.
+   *
+   * Two numbers, because one of them is a lie on its own. The RATE says whether
+   * the system is healthy; the BREAKDOWN says what to fix. An error rate that
+   * doubles is alarming until you see it is entirely `aborted` — users pressing
+   * Stop more often, which is a UX signal, not an outage.
+   */
+  const errors = one<{ failed: number }>(
+    `SELECT COALESCE(SUM(error_code IS NOT NULL), 0) AS failed FROM turns`,
+  );
+
+  const byCode = db
+    .prepare(
+      `SELECT error_code AS code, COUNT(*) AS count
+       FROM turns
+       WHERE error_code IS NOT NULL AND created_at >= datetime('now', '-30 days')
+       GROUP BY error_code
+       ORDER BY count DESC`,
+    )
+    .all() as Array<{ code: string; count: number }>;
+
+  // Errors are counted in the SAME query as turns, so the two series can never
+  // disagree about which weeks exist or how a week boundary is computed. Two
+  // queries joined in application code is how a chart ends up plotting a 40%
+  // error rate for a week whose denominator came from a different GROUP BY.
   const weekly = db
     .prepare(
-      `SELECT strftime('%Y-W%W', created_at) AS week, COUNT(*) AS turns
+      `SELECT strftime('%Y-W%W', created_at)          AS week,
+              COUNT(*)                                AS turns,
+              COALESCE(SUM(error_code IS NOT NULL), 0) AS errors
        FROM turns
        WHERE created_at >= datetime('now', '-84 days')
        GROUP BY week
        ORDER BY week`,
     )
-    .all() as Array<{ week: string; turns: number }>;
+    .all() as Array<{ week: string; turns: number; errors: number }>;
 
   const stats: Stats = {
     totalTurns: totals.total,
@@ -98,6 +133,10 @@ statsRoutes.get("/", (c) => {
     thumbsUp: totals.up,
     thumbsDown: totals.down,
     verificationPassRate: quality.completed > 0 ? quality.passed / quality.completed : 0,
+    // Denominator is ALL turns, not completed ones — a failure rate computed
+    // over successes is always zero.
+    errorRate: totals.total > 0 ? errors.failed / totals.total : 0,
+    errorsByCode: byCode.map((row) => ({ ...row, severity: severityOf(row.code) })),
     firstPassRate: quality.scored > 0 ? quality.first_pass / quality.scored : 0,
     repairRate: quality.scored > 0 ? quality.repaired / quality.scored : 0,
     avgLatencyMs: Math.round(totals.latency ?? 0),
