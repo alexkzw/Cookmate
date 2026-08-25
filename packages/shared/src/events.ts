@@ -26,6 +26,14 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
    * what the system actually did.
    */
   z.object({ type: z.literal("repairing"), issues: z.array(z.string()) }),
+  /**
+   * The model returned something that wasn't a Recipe at all — unparseable or
+   * empty — and we are sampling again. Distinct from `repairing`, which means
+   * we got a valid Recipe that broke a rule. The client must CLEAR its delta
+   * buffer on this event: the tokens it has been scraping a preview from belong
+   * to a generation that is being thrown away.
+   */
+  z.object({ type: z.literal("retrying"), reason: z.string() }),
   z.object({ type: z.literal("verification"), verification: VerificationSchema }),
   z.object({
     type: z.literal("done"),
@@ -41,7 +49,21 @@ export const StreamEventSchema = z.discriminatedUnion("type", [
       latencyMs: z.number(),
     }),
   }),
-  z.object({ type: z.literal("error"), message: z.string(), code: z.string() }),
+  z.object({
+    type: z.literal("error"),
+    message: z.string(),
+    code: z.string(),
+    /**
+     * The turn this failure was recorded against.
+     *
+     * Sent so the user has something to quote. "It didn't work" is
+     * unactionable; "turn 9f3c… failed" is one indexed lookup away from the
+     * error code, the scrubbed provider message, the request id, the rendered
+     * prompt and the exact cost. A support path that starts with a reference
+     * number is the difference between a report we can act on and one we can't.
+     */
+    turnId: z.string(),
+  }),
 ]);
 export type StreamEvent = z.infer<typeof StreamEventSchema>;
 
@@ -70,6 +92,25 @@ export const StatsSchema = z
     thumbsDown: z.number(),
     verificationPassRate: z.number(),
     /**
+     * Share of ALL turns that ended in an error. The headline reliability
+     * number, and the one this endpoint had no answer for: `failTurn` has
+     * always written `error_code`, but nothing ever read it back, so failures
+     * were recorded and never reported.
+     */
+    errorRate: z.number(),
+    /**
+     * Failures in the last 30 days by code, with the severity that decides
+     * whether anyone should care. Severity is derived at read time, not stored —
+     * it is today's policy about what to investigate, not a record of the past.
+     */
+    errorsByCode: z.array(
+      z.object({
+        code: z.string(),
+        severity: z.enum(["info", "warning", "critical"]),
+        count: z.number(),
+      }),
+    ),
+    /**
      * Passed WITHOUT needing a repair. The honest quality number: once the
      * repair loop is on, `verificationPassRate` is close to 1 by construction,
      * because a failing recipe gets a second chance before anyone sees it.
@@ -86,7 +127,17 @@ export const StatsSchema = z
      * unproven. Neither is visible if a 429 only ever reaches one browser.
      */
     limitEvents: z.array(z.object({ reason: z.string(), hits: z.number() })),
-    weekly: z.array(z.object({ week: z.string(), turns: z.number() })),
+    /**
+     * Turns and errors per week, together.
+     *
+     * Together deliberately: an error COUNT rising because traffic rose is not
+     * a regression, and the two series side by side are what make a rate
+     * readable. A single incident and a systematic regression look identical in
+     * a total; they look nothing alike in a weekly rate.
+     */
+    weekly: z.array(
+      z.object({ week: z.string(), turns: z.number(), errors: z.number() }),
+    ),
   })
   .strict();
 export type Stats = z.infer<typeof StatsSchema>;
