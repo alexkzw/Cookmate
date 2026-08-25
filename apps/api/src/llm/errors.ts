@@ -100,3 +100,71 @@ export function classifyError(err: unknown): ErrorInfo {
 
   return { code: "internal_error", message: scrub(String(err)), retryable: false };
 }
+
+/**
+ * SEVERITY — what you should DO about an error, as distinct from what it was.
+ *
+ * `code` answers "what happened". Severity answers "does anyone need to look".
+ * They are different questions and conflating them is why error logs get
+ * ignored: if every failure is an ERROR line, the one that matters is
+ * indistinguishable from the 200 that don't.
+ *
+ * The cut is deliberately not "how bad does this sound", it is WHOSE FAULT and
+ * WHAT IS THE RESPONSE:
+ *
+ *   info      Expected, correct behaviour. Not a defect. Never page.
+ *   warning   Expected at some rate; alarming as a RATE, not as an event.
+ *             The provider had a bad minute, or one input was awkward.
+ *   critical  Should be impossible. A SINGLE occurrence is a defect in our
+ *             code, our config or our contract with the model. Investigate one.
+ *
+ * That last row is the useful one. `schema_mismatch` sits there — not because
+ * a malformed recipe hurts anyone (the user just sees an error) but because
+ * structured outputs are supposed to make it unrepresentable, so one occurrence
+ * means the schema contract is broken and every downstream guarantee is
+ * suspect. Same for `bad_request`: the provider rejected a request WE built.
+ *
+ * DERIVED, NOT STORED, and that is a deliberate contrast with `scorer_hash`.
+ * A scorer hash records what actually graded a row, so backfilling it would
+ * turn a gap in the record into a false claim. Severity is not a measurement of
+ * the past — it is today's policy about what deserves attention. If tomorrow we
+ * decide timeouts are critical, we want that applied when reading old rows too,
+ * because we are restating what we care about, not what we observed.
+ */
+export type Severity = "info" | "warning" | "critical";
+
+const SEVERITY: Record<string, Severity> = {
+  // Someone pressed Stop. Recording it is useful; alerting on it is noise, and
+  // this app has already shipped the bug where cancellations were logged as
+  // provider failures and inflated the one number you would page on.
+  aborted: "info",
+
+  // The provider, or this particular input, had a bad moment. Any of these can
+  // happen on a healthy system; a SPIKE in any of them is the actual signal.
+  rate_limit: "warning",
+  overloaded: "warning",
+  timeout: "warning",
+  connection_error: "warning",
+  provider_error: "warning",
+  truncated: "warning",
+  refusal: "warning",
+  empty_response: "warning",
+
+  // Ours. A single one is worth a look.
+  auth_error: "critical", // the key is wrong, missing, or revoked
+  bad_request: "critical", // we built a request the API rejected
+  schema_mismatch: "critical", // structured outputs should make this impossible
+  api_error: "critical", // an unmapped provider status — the taxonomy has a hole
+  internal_error: "critical", // a bug in our code
+};
+
+/**
+ * An unknown code is CRITICAL, not warning.
+ *
+ * Failing loud on the unrecognised case is the only way a gap in this table
+ * announces itself. Defaulting to "warning" would let a new error code join the
+ * background hum and stay there.
+ */
+export function severityOf(code: string): Severity {
+  return SEVERITY[code] ?? "critical";
+}
