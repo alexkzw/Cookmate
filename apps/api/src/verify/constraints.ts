@@ -242,22 +242,19 @@ export function verifyRecipe(recipe: Recipe, request: CookRequest): Verification
     else activeMinutes += step.minutes;
   }
 
-  const totalMinutes = recipe.prepMinutes + recipe.cookMinutes;
+  /**
+   * Total time is the sum of the steps, not a number the model reported.
+   *
+   * There is no `step_time_mismatch` check any more because there is nothing
+   * left to mismatch: the recipe no longer states a total, so the total and the
+   * steps cannot disagree. That check used to account for six of seven
+   * first-pass failures. Deleting the field deleted the failure mode.
+   */
+  const totalMinutes = activeMinutes + passiveMinutes;
   if (totalMinutes > request.maxMinutes) {
     violations.push({
       kind: "over_time",
       detail: `Takes ${totalMinutes} minutes but you have ${request.maxMinutes}.`,
-      subject: null,
-    });
-  }
-
-  // Steps can overlap (marinating while chopping), so we only flag a step sum
-  // that *exceeds* the stated total — that's an inconsistency, not overlap.
-  const stepMinutes = recipe.steps.reduce((sum, s) => sum + s.minutes, 0);
-  if (stepMinutes > totalMinutes) {
-    violations.push({
-      kind: "step_time_mismatch",
-      detail: `Steps add up to ${stepMinutes} minutes but the recipe claims ${totalMinutes}.`,
       subject: null,
     });
   }
