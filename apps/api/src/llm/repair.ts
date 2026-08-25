@@ -43,7 +43,7 @@ export function buildRepairTurn(
     "Your previous answer:",
     JSON.stringify(previous),
     "",
-    "Return a corrected recipe in the same format. Check your arithmetic before",
-    "you answer: the step minutes must sum to prepMinutes + cookMinutes.",
+    "Return a corrected recipe in the same format. Fix only what was flagged —",
+    "changing things that already passed risks trading one violation for another.",
   ].join("\n");
 }
