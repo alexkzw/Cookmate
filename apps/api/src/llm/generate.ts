@@ -105,8 +105,18 @@ const CACHE_TTL = "1h" as const;
  * conversation to reuse, so a marker would pay the write premium for a read
  * that never happens.
  */
-function withConversationBreakpoint(messages: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
+function withConversationBreakpoint(
+  messages: Anthropic.MessageParam[],
+  isRepair: boolean,
+): Anthropic.MessageParam[] {
   if (messages.length < 2) return messages;
+
+  // A repair's last message is the findings prompt, which is unique to that
+  // attempt — so a breakpoint here writes an entry nothing will ever read, at
+  // 2x the input rate. Measured at ~2,400 wasted write tokens per repaired
+  // turn, roughly 5% of its cost. The repair still reads the system prefix;
+  // it just stops paying to cache a suffix with no second reader.
+  if (isRepair) return messages;
 
   const last = messages[messages.length - 1];
   if (last === undefined || typeof last.content !== "string") return messages;
@@ -147,6 +157,7 @@ export function buildPromptBlocks(
     ],
     messages: withConversationBreakpoint(
       buildMessages(options.history ?? [], options.userTurnOverride ?? buildUserTurn(request)),
+      options.userTurnOverride !== undefined,
     ),
   };
 }
