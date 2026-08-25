@@ -34,7 +34,12 @@ export type LimitReason =
   | "rate_limit"
   | "concurrency"
   | "user_daily_cap"
-  | "global_daily_cap";
+  | "global_daily_cap"
+  // Not a limit on the CALLER at all — the upstream provider is failing and the
+  // circuit breaker is shedding load. It lives in the same enum because it is
+  // the same decision ("may this request start now?") reaching the same log,
+  // and splitting it would mean /api/stats reported refusals from two places.
+  | "provider_down";
 
 db.exec(`
 -- Refusals are events worth keeping. A cap that fires constantly is set wrong,
