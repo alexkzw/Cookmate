@@ -30,7 +30,10 @@ export async function enforceLimits(c: Context, next: Next): Promise<Response | 
     recordLimitEvent(user.id, refusal.reason, refusal.detail);
     console.warn(`[limits] refused ${user.id}: ${refusal.reason} (${refusal.detail})`);
     c.header("Retry-After", String(refusal.retryAfterSeconds));
-    return c.json({ error: refusal.message, code: refusal.reason }, 429);
+    // 429 for "you asked for too much", 503 for "we are broken". The client
+    // shows a different message for each, and a retrying caller must be able
+    // to tell "back off" from "not your fault".
+    return c.json({ error: refusal.message, code: refusal.reason }, refusal.status ?? 429);
   }
 
   // Claim the estimated spend before the model is called. Released by the route
