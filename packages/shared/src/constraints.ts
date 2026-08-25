@@ -49,8 +49,12 @@ export const ViolationSchema = z
     kind: z.enum([
       "missing_ingredient", // needs shopping when willShop === false
       "missing_equipment", // a step needs an appliance the user doesn't own
-      "over_time", // prep + cook exceeds maxMinutes
-      "step_time_mismatch", // step minutes don't sum to the stated total
+      "over_time", // the steps sum to more than maxMinutes
+      // RETIRED — no longer emitted. The recipe no longer states its own total
+      // (see recipe.ts), so a mismatch is unrepresentable rather than checked.
+      // Kept in the enum because stored verifications still contain it and must
+      // stay parseable; removing it would make old eval rows unreadable.
+      "step_time_mismatch",
       "disliked_ingredient", // contains something on the dislike list
       "dietary_conflict", // contains something the dietary tags forbid
       "servings_mismatch",
