@@ -54,14 +54,15 @@ export function RecipeCard({
               40-minute bake with 8 minutes of work is a weeknight meal. */}
           <span className="inline-flex items-center gap-1.5">
             <Clock className="h-4 w-4 text-slate-400" />
-            {recipe.prepMinutes + recipe.cookMinutes} min
-            {verification && verification.passiveMinutes > 0 ? (
+            {/* Derived from the steps, not reported by the model — and derived
+                the same way on both sides, so the card can show a total before
+                the verification event lands without ever disagreeing with it. */}
+            {verification?.totalMinutes ??
+              recipe.steps.reduce((sum, s) => sum + s.minutes, 0)}{" "}
+            min
+            {verification && verification.passiveMinutes > 0 && (
               <span className="font-medium text-brand-700">
                 · only {verification.activeMinutes} hands-on
-              </span>
-            ) : (
-              <span className="text-slate-400">
-                ({recipe.prepMinutes} prep · {recipe.cookMinutes} cook)
               </span>
             )}
           </span>
