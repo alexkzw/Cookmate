@@ -15,6 +15,9 @@ export function Chat({ showUsage }: { showUsage: boolean }) {
   const busy =
     state.phase === "generating" ||
     state.phase === "repairing" ||
+    // A resample is still work in flight. Omitting it here would re-enable the
+    // form mid-generation and let a second request start on top of the first.
+    state.phase === "retrying" ||
     state.phase === "verifying";
   const hasResult = state.recipe !== null;
 
@@ -46,7 +49,36 @@ export function Chat({ showUsage }: { showUsage: boolean }) {
         {state.phase === "error" && (
           <div className="flex items-start gap-3 rounded-xl bg-red-50 p-4 text-sm text-red-800 ring-1 ring-red-200">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-            <p>{state.error}</p>
+            <div className="space-y-2">
+              <p>{state.error}</p>
+              {/* The escalation path. Everything needed to diagnose this failure
+                  is already on the turn row — the code, the scrubbed provider
+                  message, the request id, the rendered prompt and the cost — so
+                  the only thing missing was a way for the person to point at it.
+                  Shown as quiet secondary text: it is a reference, not a
+                  diagnosis, and a stack trace in the UI helps nobody. */}
+              {state.errorTurnId && (
+                <p className="text-xs text-red-700/80">
+                  If this keeps happening, quote reference{" "}
+                  <code className="rounded bg-red-100 px-1 py-0.5 font-mono">
+                    {state.errorTurnId.slice(0, 8)}
+                  </code>
+                  {state.errorCode && <> · {state.errorCode.replace(/_/g, " ")}</>}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Distinct from `repairing`: there is no recipe to critique, so there
+            are no findings to list. Saying "that came back malformed" is more
+            honest than a spinner that implies the first attempt is still alive. */}
+        {state.phase === "retrying" && (
+          <div className="rounded-xl bg-amber-50 p-4 text-sm text-amber-900 ring-1 ring-amber-200">
+            <p className="flex items-center gap-2 font-medium">
+              <Sparkles className="h-4 w-4 animate-shimmer" />
+              That came back malformed — asking again…
+            </p>
           </div>
         )}
 
