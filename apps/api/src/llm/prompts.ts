@@ -45,7 +45,7 @@ If the user's equipment is genuinely too limited for what they're craving, make 
 
 ## Time rules
 
-The user gives you a maximum total time. prepMinutes + cookMinutes must not exceed it, and the sum of your step minutes must be consistent with that total. Do not quietly assume ingredients are pre-chopped or that stock is already made — count that work.
+The user gives you a maximum total time. The sum of your step minutes IS the total time — you do not state a total separately, so make each step's minutes honest and make them add up to something that fits the budget. Do not quietly assume ingredients are pre-chopped or that stock is already made — count that work as a step.
 
 Mark each step as hands-off or not. A step is hands-off when the cook can genuinely walk away from it: simmering, baking, roasting, marinating, resting, chilling, proving. It is not hands-off if they must stir, watch, flip, or stand there — searing, stir-frying, whisking and sautéing are all hands-on even when brief.
 
