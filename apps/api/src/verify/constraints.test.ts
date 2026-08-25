@@ -43,8 +43,6 @@ function recipe(overrides: Partial<Recipe> = {}): Recipe {
     summary: "Fast one-pan dinner.",
     cuisine: "Asian",
     servings: 2,
-    prepMinutes: 10,
-    cookMinutes: 15,
     difficulty: "easy",
     ingredients: [
       ing("chicken thigh", 300, "g", "pantry"),
@@ -154,7 +152,7 @@ describe("verifyRecipe", () => {
     expect(result.ok).toBe(true);
     expect(result.violations).toEqual([]);
     expect(result.shoppingList).toEqual([]);
-    expect(result.totalMinutes).toBe(25);
+    expect(result.totalMinutes).toBe(13); // 3 + 10, summed from the steps
   });
 
   it("flags an ingredient the user must buy when they said they won't shop", () => {
@@ -195,27 +193,47 @@ describe("verifyRecipe", () => {
     expect(result.shoppingList).toEqual(["gochujang"]);
   });
 
-  it("flags a recipe that exceeds the time budget", () => {
-    const result = verifyRecipe(recipe({ prepMinutes: 20, cookMinutes: 40 }), baseRequest);
-    expect(result.violations.map((v) => v.kind)).toContain("over_time");
-  });
-
-  it("flags step times that exceed the stated total", () => {
+  it("flags a recipe whose steps exceed the time budget", () => {
+    // The budget is 30 minutes; these steps sum to 60. Nothing is "claimed" any
+    // more — the total is whatever the steps add up to.
     const r = recipe({
       steps: [
         {
           number: 1,
           instruction: "Braise.",
-          minutes: 90,
+          minutes: 60,
           handsOff: true,
           equipment: ["oven"],
           uses: [],
         },
       ],
     });
-    expect(verifyRecipe(r, baseRequest).violations.map((v) => v.kind)).toContain(
-      "step_time_mismatch",
-    );
+    const result = verifyRecipe(r, baseRequest);
+    expect(result.violations.map((v) => v.kind)).toContain("over_time");
+    expect(result.totalMinutes).toBe(60); // derived from the one 60-minute step
+  });
+
+  it("can never emit step_time_mismatch — the recipe states no total to mismatch", () => {
+    // This was six of seven first-pass failures until the schema stopped asking
+    // the model for prepMinutes/cookMinutes. It is now unrepresentable rather
+    // than caught, so the kind must never appear again regardless of input.
+    for (const minutes of [1, 13, 60, 500]) {
+      const r = recipe({
+        steps: [
+          {
+            number: 1,
+            instruction: "Braise.",
+            minutes,
+            handsOff: true,
+            equipment: ["oven"],
+            uses: [],
+          },
+        ],
+      });
+      expect(verifyRecipe(r, baseRequest).violations.map((v) => v.kind)).not.toContain(
+        "step_time_mismatch",
+      );
+    }
   });
 
   it("flags a disliked ingredient even as a garnish", () => {
@@ -326,8 +344,6 @@ describe("equipment", () => {
 describe("active vs passive time", () => {
   it("splits hands-on from walk-away time", () => {
     const r = recipe({
-      prepMinutes: 10,
-      cookMinutes: 50,
       steps: [
         {
           number: 1,
@@ -358,7 +374,7 @@ describe("active vs passive time", () => {
     const result = verifyRecipe(r, { ...baseRequest, maxMinutes: 60 });
     expect(result.activeMinutes).toBe(10); // 8 + 2
     expect(result.passiveMinutes).toBe(45);
-    expect(result.totalMinutes).toBe(60);
+    expect(result.totalMinutes).toBe(55); // 8 + 45 + 2, derived
   });
 
   it("reports zero passive time when every step is hands-on", () => {
@@ -509,8 +525,6 @@ describe("display name vs match key", () => {
           uses: ["tomato"],
         },
       ],
-      prepMinutes: 5,
-      cookMinutes: 0,
     });
     const result = verifyRecipe(r, request);
     expect(result.violations.map((v) => v.kind)).not.toContain("missing_ingredient");
