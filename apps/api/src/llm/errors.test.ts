@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import Anthropic from "@anthropic-ai/sdk";
-import { classifyError } from "./errors.js";
+import { classifyError, severityOf } from "./errors.js";
 
 describe("classifyError", () => {
   it("classifies a user abort as `aborted`, not `api_error`", () => {
@@ -32,5 +32,46 @@ describe("classifyError", () => {
     const info = classifyError(err);
     expect(info.message).not.toContain("SECRETVALUE");
     expect(info.message).toContain("sk-ant-***");
+  });
+});
+
+describe("severityOf", () => {
+  it("treats a user cancellation as info, not an error", () => {
+    // The bug this guards: aborts were once classified as `api_error` and
+    // logged at error level, inflating the one number you would page on.
+    expect(severityOf("aborted")).toBe("info");
+  });
+
+  it.each(["rate_limit", "overloaded", "timeout", "connection_error", "provider_error"])(
+    "treats %s as a warning — alarming as a rate, not as an event",
+    (code) => {
+      expect(severityOf(code)).toBe("warning");
+    },
+  );
+
+  it.each(["auth_error", "bad_request", "schema_mismatch", "internal_error"])(
+    "treats %s as critical — one occurrence is our defect",
+    (code) => {
+      expect(severityOf(code)).toBe("critical");
+    },
+  );
+
+  it("defaults an unknown code to critical so a gap in the table is loud", () => {
+    // Defaulting to `warning` would let a brand-new failure mode join the
+    // background hum and stay there unnoticed.
+    expect(severityOf("something_we_have_never_seen")).toBe("critical");
+  });
+
+  it("assigns a severity to every code classifyError can produce", () => {
+    // Guards the drift where a new branch is added to classifyError and the
+    // severity table is not updated — which would silently mark it critical.
+    const codes = [
+      "aborted", "refusal", "truncated", "empty_response", "schema_mismatch",
+      "timeout", "connection_error", "rate_limit", "overloaded", "auth_error",
+      "bad_request", "provider_error", "api_error", "internal_error",
+    ];
+    for (const code of codes) {
+      expect(["info", "warning", "critical"]).toContain(severityOf(code));
+    }
   });
 });
