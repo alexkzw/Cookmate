@@ -7,7 +7,8 @@ import { enforceLimits } from "../limits/middleware.js";
 import { getPantry, getPreferences } from "../db/index.js";
 import { RecipeGenerationError } from "../llm/generate.js";
 import { generateVerifiedRecipe } from "../llm/verified.js";
-import { classifyError } from "../llm/errors.js";
+import { classifyError, severityOf } from "../llm/errors.js";
+import { providerBreaker } from "../limits/breaker.js";
 import { openTurn, completeTurn, failTurn, conversationHistory } from "../telemetry/turns.js";
 import { buildUserTurn } from "../llm/prompts.js";
 
@@ -112,8 +113,16 @@ chatRoutes.post("/stream", requireAuth, enforceLimits, async (c) => {
             // The first recipe has already streamed to the browser, so a silent
             // second attempt would look like a stall. Say what's happening.
             onRepairStart: (issues) => void send({ type: "repairing", issues }),
+            // The browser has been scraping a preview out of deltas that belong
+            // to a generation we are discarding. Tell it, so it clears them
+            // rather than leaving a title from a recipe nobody will ever see.
+            onResample: (reason) => void send({ type: "retrying", reason }),
           },
         );
+
+      // The provider answered. Closes the circuit if a prior failure had it
+      // counting down — recovery is observed, never assumed from a timer.
+      providerBreaker.recordSuccess();
 
       await send({ type: "recipe", recipe });
       await send({ type: "verification", verification });
@@ -148,6 +157,10 @@ chatRoutes.post("/stream", requireAuth, enforceLimits, async (c) => {
       // showed up in the console as an internal bug, and the two records of the
       // same failure disagreed. Whatever you log is what someone greps at 2am.
       const info = classifyError(err);
+      // Only provider faults move the breaker. A refusal or a schema mismatch
+      // says something about this request, not about the upstream's health, and
+      // letting either open the circuit would take the app down over one input.
+      providerBreaker.recordFailure(info);
       const message =
         err instanceof RecipeGenerationError
           ? err.message
@@ -156,11 +169,29 @@ chatRoutes.post("/stream", requireAuth, enforceLimits, async (c) => {
       // the turn log so the cost of failure is visible, not just its existence.
       const usage = err instanceof RecipeGenerationError ? err.usage : undefined;
       failTurn(turnId, info, usage);
-      console.error(
-        `[chat] turn ${turnId} failed (${info.code}${info.status ? ` ${info.status}` : ""}` +
+
+      // SEVERITY DECIDES THE LOG LEVEL, so the console is greppable by urgency
+      // rather than by luck. Every failure used to be console.error, which
+      // means a user pressing Stop and the API key being revoked produced the
+      // same line — and a log where everything is an error is a log nobody
+      // filters. `info` goes to console.info so cancellations stop polluting
+      // the stream you actually watch.
+      const severity = severityOf(info.code);
+      const log =
+        severity === "critical"
+          ? console.error
+          : severity === "warning"
+            ? console.warn
+            : console.info;
+      log(
+        `[chat] ${severity.toUpperCase()} turn ${turnId} failed (${info.code}` +
+          `${info.status ? ` ${info.status}` : ""}` +
           `${info.requestId ? `, request ${info.requestId}` : ""}): ${info.message}`,
       );
-      await send({ type: "error", message, code: info.code });
+
+      // turnId travels with the error so the user has a reference to quote.
+      // Everything needed to diagnose the failure is already on that row.
+      await send({ type: "error", message, code: info.code, turnId });
     } finally {
       // Must be here, not in the middleware. `next()` returns when the stream
       // STARTS, so releasing there would free the budget ~26 seconds before the
