@@ -401,3 +401,59 @@ export function unlabelledRows(limit = 20): LabelCandidate[] {
     )
     .all(JUDGE_MODEL, judgePromptHash(), limit) as LabelCandidate[];
 }
+
+export interface ArmNeutrality {
+  model: string;
+  repair: number | null;
+  judged: number;
+  judgeMean: number;
+  /** Human-labelled subset of the same arm. Null when nothing is labelled. */
+  labelled: number;
+  humanMean: number | null;
+  /** judgeMean − humanMean on the labelled subset. Null without labels. */
+  bias: number | null;
+}
+
+/**
+ * IS THE JUDGE ARM-NEUTRAL?
+ *
+ * The worry with LLM-as-judge is self-preference — a model rating its own
+ * family's output higher. That is not cleanly testable here, because the judge
+ * and both generators are Claude: Haiku grading Sonnet and Opus is a sibling
+ * grading siblings, so a preference for one proves nothing about self-regard.
+ *
+ * What IS testable, and what actually matters for an arm comparison, is
+ * narrower and more useful: **does the judge's error against humans differ
+ * BETWEEN arms?**
+ *
+ *   - Judge mean differs, bias against humans is the same → the arms genuinely
+ *     differ in quality. The judge is measuring, not favouring.
+ *   - Judge mean differs AND bias differs → the judge is not arm-neutral, and
+ *     any conclusion drawn from comparing arms with it is contaminated.
+ *
+ * That second case is the one that would quietly invalidate a model-routing
+ * decision, which is exactly the kind of decision this judge exists to inform.
+ * Note the honest limitation: bias is only computable on the labelled subset,
+ * so labels must span BOTH arms — labelling only the Sonnet rows measures
+ * nothing about neutrality.
+ */
+export function armNeutrality(): ArmNeutrality[] {
+  return db
+    .prepare(
+      `SELECT e.model,
+              e.repair,
+              COUNT(*)                                   AS judged,
+              AVG(j.overall)                             AS judgeMean,
+              COUNT(h.eval_run_id)                       AS labelled,
+              AVG(h.overall)                             AS humanMean,
+              AVG(CASE WHEN h.eval_run_id IS NOT NULL
+                       THEN j.overall - h.overall END)   AS bias
+       FROM judge_scores j
+       JOIN eval_runs e   ON e.id = j.eval_run_id
+       LEFT JOIN human_labels h ON h.eval_run_id = e.id
+       WHERE j.judge_model = ? AND j.judge_prompt_hash = ?
+       GROUP BY e.model, e.repair
+       ORDER BY judgeMean DESC`,
+    )
+    .all(JUDGE_MODEL, judgePromptHash()) as ArmNeutrality[];
+}
