@@ -16,6 +16,7 @@ import { classifyError } from "../llm/errors.js";
 import { RecipeGenerationError } from "../llm/generate.js";
 import { decide } from "../limits/policy.js";
 import { recordLimitEvent, reserve } from "../limits/budget.js";
+import { providerBreaker } from "../limits/breaker.js";
 import { openTurn, completeTurn, failTurn } from "../telemetry/turns.js";
 import { buildUserTurn } from "../llm/prompts.js";
 
@@ -240,6 +241,13 @@ server.registerTool(
 
     try {
       const result = await generateVerifiedRecipe(request, () => {}, { repair: true });
+      // Both doors must REPORT to the breaker, not just consult it. `decide()`
+      // already gates this call, so MCP inherits the protection — but a breaker
+      // that is only fed by the HTTP route would never trip on a stdio-only
+      // deployment, and would sit closed through an outage it could see. Same
+      // lesson as the limits themselves: a second entry point is a second place
+      // to forget.
+      providerBreaker.recordSuccess();
       completeTurn(turnId, {
         recipe: result.recipe,
         verification: result.verification,
@@ -293,8 +301,13 @@ server.registerTool(
       };
     } catch (err) {
       const info = classifyError(err);
+      providerBreaker.recordFailure(info);
       failTurn(turnId, info, err instanceof RecipeGenerationError ? err.usage : undefined);
-      return fail(`Couldn't generate a recipe (${info.code}): ${info.message}`);
+      // The turn id goes to the caller for the same reason it goes to the
+      // browser: it is the reference that turns a failure report into a lookup.
+      return fail(
+        `Couldn't generate a recipe (${info.code}): ${info.message} [ref ${turnId.slice(0, 8)}]`,
+      );
     } finally {
       // The lease must be released on every path, including the failure one,
       // or a failed call holds budget until its 180s expiry.
