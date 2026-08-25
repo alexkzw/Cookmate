@@ -13,6 +13,7 @@ import {
   calibration,
   lengthBias,
   judgeByCondition,
+  armNeutrality,
 } from "./judge.js";
 import { getFixtures as fixturesById } from "./fixtures.js";
 import type { Recipe } from "@cookmate/shared";
@@ -188,6 +189,41 @@ function judgeReport(suiteId?: string): void {
     console.log(`  correlation         : ${cal.correlation === null ? "n/a" : cal.correlation.toFixed(2)}`);
     if (cal.n < 10) console.log(`  NOTE: ${cal.n} labels is too few to conclude much. Aim for 15.`);
     else if (cal.meanAbsError > 1) console.log("  WARNING: the judge is off by more than a point on average. Don't quote its scores.");
+  }
+
+  // ARM NEUTRALITY — does the judge's error differ BETWEEN arms?
+  const arms = armNeutrality();
+  console.log("\nARM NEUTRALITY — is the judge fair across generating models?");
+  if (arms.length < 2) {
+    console.log("  (only one arm judged — judge more than one to compare)");
+  } else {
+    console.table(
+      arms.map((a) => ({
+        model: a.model,
+        repair: a.repair === null ? "?" : a.repair ? "on" : "off",
+        judged: a.judged,
+        judge_mean: a.judgeMean.toFixed(2),
+        labelled: a.labelled,
+        human_mean: a.humanMean === null ? "—" : a.humanMean.toFixed(2),
+        bias: a.bias === null ? "—" : fmtSigned(a.bias),
+      })),
+    );
+    const withBias = arms.filter((a) => a.bias !== null && a.labelled >= 3);
+    if (withBias.length < 2) {
+      console.log("  Label recipes from BOTH arms to read this — bias needs human anchors on each.");
+    } else {
+      const spread =
+        Math.max(...withBias.map((a) => a.bias as number)) -
+        Math.min(...withBias.map((a) => a.bias as number));
+      console.log(`  bias spread between arms : ${spread.toFixed(2)} points`);
+      console.log(
+        spread > 0.5
+          ? "  WARNING: the judge is off by different amounts per arm — it is not arm-neutral,\n" +
+            "  so any arm comparison drawn from its scores is contaminated."
+          : "  Bias is consistent across arms, so a difference in judge_mean reflects the\n" +
+            "  recipes rather than the judge's taste for a particular model.",
+      );
+    }
   }
 
   // LENGTH BIAS — the best-documented judge failure, and the easiest to test.
