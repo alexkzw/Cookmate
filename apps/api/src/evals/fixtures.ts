@@ -82,7 +82,7 @@ export const FIXTURES: Fixture[] = [
   },
   {
     id: "tight-time",
-    probes: "over_time + step_time_mismatch — the known failure mode",
+    probes: "over_time — a tight budget with several timed components",
     expect: { ok: true },
     request: {
       ...base,
@@ -154,12 +154,17 @@ export const FIXTURES: Fixture[] = [
   /**
    * TIME-ARITHMETIC BLOCK.
    *
-   * `step_time_mismatch` is the only violation kind this app has ever produced
-   * (4 for 4 at the time of writing), so it's the first thing the prompt will
-   * be changed to fix — and a fix is unmeasurable if the baseline only trips it
-   * three or four times. These cases deliberately over-sample the failure mode:
-   * many stages, parallel work, and passive stretches that invite double
-   * counting.
+   * These cases over-sample time arithmetic: many stages, parallel work, and
+   * passive stretches that invite double counting.
+   *
+   * They were written when `step_time_mismatch` was the dominant failure —
+   * 6 of 7 first-pass failures — because a fix is unmeasurable if the baseline
+   * only trips the bug three or four times. That kind is now RETIRED: the
+   * recipe no longer states its own total, so the steps and the total cannot
+   * disagree. The block is kept because the underlying skill it probes is still
+   * real and still checked, now as `over_time` — a model that mis-times a
+   * multi-stage roast will overshoot the budget instead of contradicting
+   * itself.
    *
    * The trade this makes is explicit: the *aggregate* pass rate across this set
    * is no longer representative of production traffic. That's fine, because the
@@ -168,7 +173,7 @@ export const FIXTURES: Fixture[] = [
    */
   {
     id: "time-multi-component",
-    probes: "step_time_mismatch — several components must be timed together",
+    probes: "over_time — several components must be timed together and still fit",
     expect: { ok: true },
     request: {
       ...base,
@@ -182,7 +187,7 @@ export const FIXTURES: Fixture[] = [
   },
   {
     id: "time-parallel-work",
-    probes: "step_time_mismatch — work overlaps, so naive summing overshoots",
+    probes: "over_time — work overlaps, so naive summing overshoots the budget",
     expect: { ok: true },
     request: {
       ...base,
@@ -195,7 +200,7 @@ export const FIXTURES: Fixture[] = [
   },
   {
     id: "time-proving-dough",
-    probes: "step_time_mismatch + passive — a long hands-off stretch mid-recipe",
+    probes: "over_time + passive — a long hands-off stretch mid-recipe",
     expect: { ok: true },
     request: {
       ...base,
@@ -222,7 +227,7 @@ export const FIXTURES: Fixture[] = [
   },
   {
     id: "time-many-small-steps",
-    probes: "step_time_mismatch — lots of short stages that must still add up",
+    probes: "over_time — lots of short stages that must still fit the budget",
     expect: { ok: true },
     request: {
       ...base,
