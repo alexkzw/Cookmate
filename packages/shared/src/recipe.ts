@@ -175,11 +175,19 @@ export const RecipeSchema = z
     cuisine: z.string().describe("e.g. Thai, Italian, Mexican, fusion"),
     servings: z.number(),
     /**
-     * The model reports its own timings; the verifier checks them against the
-     * user's stated budget and against the sum of step minutes.
+     * NOTE: there is no `prepMinutes` / `cookMinutes` here, deliberately.
+     *
+     * The model used to report both and the verifier checked that the step
+     * minutes summed to them — which produced `step_time_mismatch`, six of the
+     * seven first-pass failures on the eval suite. Repair rarely fixed it,
+     * because repair regenerates rather than edits, so it corrected the old
+     * arithmetic and drifted into new arithmetic.
+     *
+     * Total time is now DERIVED from the steps. The mismatch isn't caught, it's
+     * unrepresentable — the same move as making `equipment` an enum. Exact
+     * arithmetic should never be delegated to a model: asking for it only
+     * creates something else to verify.
      */
-    prepMinutes: z.number(),
-    cookMinutes: z.number(),
     difficulty: z.enum(["easy", "medium", "hard"]),
     ingredients: z.array(IngredientSchema),
     steps: z.array(StepSchema),
