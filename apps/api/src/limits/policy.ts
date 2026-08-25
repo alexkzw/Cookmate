@@ -1,6 +1,7 @@
 import { config } from "../config.js";
 import { SlidingWindow } from "./window.js";
 import { budgetFor, globalBudget, inFlight, type LimitReason } from "./budget.js";
+import { providerBreaker } from "./breaker.js";
 
 /**
  * THE ADMISSION POLICY — deliberately transport-agnostic.
@@ -32,6 +33,14 @@ export interface Refusal {
   message: string;
   detail: string;
   retryAfterSeconds: number;
+  /**
+   * HTTP status for transports that have one. Defaults to 429 because almost
+   * every refusal here IS the caller asking for too much — but a tripped
+   * circuit breaker is not the caller's fault, and answering 429 would tell
+   * them to slow down when the correct advice is "we are broken, come back".
+   * A client that retries on 429 and gives up on 503 needs these to differ.
+   */
+  status?: 429 | 503;
 }
 
 /**
@@ -43,6 +52,20 @@ export interface Refusal {
  * that ordering is the difference between shedding load and adding to it.
  */
 export function decide(userId: string, now: number = Date.now()): Refusal | null {
+  // FIRST, and not keyed by user: when the provider is down, every caller's
+  // request fails, so there is no point spending the per-user checks — let
+  // alone a socket and six minutes of timeout — to discover that individually.
+  // This is also the cheapest check in the function: two field reads.
+  if (!providerBreaker.allow(now)) {
+    return {
+      reason: "provider_down",
+      message: "Recipe generation is temporarily unavailable. We're on it — try again in a minute.",
+      detail: `breaker ${providerBreaker.state(now)}`,
+      retryAfterSeconds: providerBreaker.retryAfterSeconds(now),
+      status: 503,
+    };
+  }
+
   const concurrent = inFlight(userId, now);
   if (concurrent >= config.MAX_CONCURRENT_PER_USER) {
     return {
@@ -101,6 +124,7 @@ export function limitStatus(userId: string, now: number = Date.now()) {
     maxConcurrent: config.MAX_CONCURRENT_PER_USER,
     requestsRemainingThisMinute: window.remaining,
     requestsPerMinute: config.RATE_LIMIT_PER_MINUTE,
+    providerState: providerBreaker.state(now),
     globalSpentUsd: Number(global.spentUsd.toFixed(4)),
     globalCapUsd: global.capUsd,
   };
