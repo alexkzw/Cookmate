@@ -29,7 +29,16 @@ export type CookRequestInput = Omit<
  * ReadableStream — about twenty lines, and it gives us abort support for free.
  */
 
-export type Phase = "idle" | "generating" | "repairing" | "verifying" | "done" | "error";
+export type Phase =
+  | "idle"
+  | "generating"
+  /** A valid recipe broke a rule; the model is being asked to fix it. */
+  | "repairing"
+  /** The output wasn't a recipe at all; we're sampling again from scratch. */
+  | "retrying"
+  | "verifying"
+  | "done"
+  | "error";
 
 export interface Usage {
   inputTokens: number;
@@ -58,6 +67,16 @@ export interface StreamState {
   repairing: string[] | null;
   usage: Usage | null;
   error: string | null;
+  /**
+   * The stable error code and the turn it was recorded against.
+   *
+   * Both are shown to the user, which is a deliberate choice: a reference the
+   * person can quote turns "it broke" into a row we can look up — error code,
+   * scrubbed provider message, request id, rendered prompt, exact cost. Without
+   * it the only escalation path a user has is a description of what they saw.
+   */
+  errorCode: string | null;
+  errorTurnId: string | null;
 }
 
 const EMPTY: StreamState = {
@@ -69,6 +88,8 @@ const EMPTY: StreamState = {
   repairing: null,
   usage: null,
   error: null,
+  errorCode: null,
+  errorTurnId: null,
 };
 
 /**
@@ -184,6 +205,18 @@ export function useRecipeStream() {
             case "repairing":
               setState((s) => ({ ...s, phase: "repairing", repairing: event.issues }));
               break;
+            case "retrying":
+              // Everything scraped so far belongs to a generation being thrown
+              // away, so the buffer AND the preview both reset. Leaving the old
+              // title up would show the user a recipe that will never arrive.
+              jsonBuffer = "";
+              setState((s) => ({
+                ...s,
+                phase: "retrying",
+                preview: EMPTY.preview,
+                repairing: null,
+              }));
+              break;
             case "recipe":
               setState((s) => ({ ...s, recipe: event.recipe, phase: "verifying", repairing: null }));
               break;
@@ -194,7 +227,13 @@ export function useRecipeStream() {
               setState((s) => ({ ...s, usage: event.usage, phase: "done" }));
               break;
             case "error":
-              setState((s) => ({ ...s, error: event.message, phase: "error" }));
+              setState((s) => ({
+                ...s,
+                error: event.message,
+                errorCode: event.code,
+                errorTurnId: event.turnId,
+                phase: "error",
+              }));
               break;
           }
         }
