@@ -119,9 +119,28 @@ addColumnIfMissing("turns", "reasoning_effort", "TEXT");
 // Why a turn failed, not just that it did. See llm/errors.ts.
 addColumnIfMissing("turns", "error_message", "TEXT");
 addColumnIfMissing("turns", "error_retryable", "INTEGER");
-// Prompt provenance in product telemetry, matching what eval_runs already
-// records — otherwise a quality change can't be attributed to a prompt edit.
+/**
+ * WHICH PROMPT AND WHICH SCORER PRODUCED THIS TURN.
+ *
+ * `prompt_hash` was added here with exactly the right justification and then
+ * never written by anything — a column that was null on every row from the day
+ * it shipped. The comment claimed provenance the data never had, which is worse
+ * than not having the column: a query grouping on it would have returned one
+ * bucket and looked like a finished analysis.
+ *
+ * `openTurn` populates both now. Together they are what makes the ONLINE half of
+ * "did my prompt change help?" possible at all — without them, turns from before
+ * and after an edit are identical rows and any movement in the thumbs-up rate is
+ * unattributable.
+ *
+ * Deliberately NOT backfilled. Older turns ran on prompt text that is gone, and
+ * stamping today's hash on them would assert they saw a prompt they never did —
+ * the same reasoning that keeps `scorer_hash` unfilled on old eval rows. Null
+ * means "recorded before this was tracked", which is true; a wrong hash would
+ * silently compare an arm against itself.
+ */
 addColumnIfMissing("turns", "prompt_hash", "TEXT");
+addColumnIfMissing("turns", "scorer_hash", "TEXT");
 // 2 when the repair loop ran. Lets /api/stats separate "right first time" from
 // "rescued", which a single pass rate cannot.
 addColumnIfMissing("turns", "attempts", "INTEGER");
