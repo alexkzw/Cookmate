@@ -3,6 +3,8 @@ import type { CookRequest, Recipe, Verification } from "@cookmate/shared";
 import { db } from "../db/index.js";
 import type { CallUsage } from "../llm/models.js";
 import type { ErrorInfo } from "../llm/errors.js";
+import { promptHash } from "../llm/prompts.js";
+import { SCORER_HASH } from "../verify/provenance.js";
 
 /**
  * Turn logging.
@@ -25,8 +27,8 @@ export function openTurn(
   db.prepare(
     `INSERT INTO turns
        (id, user_id, craving, servings, max_minutes, effort, will_shop, pantry_json, cookware_json,
-        user_turn, parent_turn_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        user_turn, parent_turn_id, prompt_hash, scorer_hash)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     userId,
@@ -39,6 +41,12 @@ export function openTurn(
     JSON.stringify(request.cookware),
     meta.userTurn,
     meta.parentTurnId ?? null,
+    // Recorded at OPEN, not at completion: this is a property of the request we
+    // are about to send, and a turn that fails still ran on a specific prompt.
+    // Stamping it only on success would lose the provenance of exactly the
+    // turns whose provenance you most want — the ones that went wrong.
+    promptHash(),
+    SCORER_HASH,
   );
   return id;
 }
