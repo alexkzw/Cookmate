@@ -1,10 +1,8 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
 import { db, addColumnIfMissing } from "../db/index.js";
-import { SYSTEM_PROMPT } from "../llm/prompts.js";
+import { promptHash } from "../llm/prompts.js";
+import { SCORER_HASH } from "../verify/provenance.js";
 import type { Verification } from "@cookmate/shared";
 import type { CallUsage } from "../llm/models.js";
 import type { ErrorInfo } from "../llm/errors.js";
@@ -139,64 +137,15 @@ function gitSha(): string {
 
 const GIT_SHA = gitSha();
 
-/**
- * A content hash of the SCORER — the code that decides whether a recipe passed.
- *
- * `git_sha` was doing this job and doing it badly. It answers "which commit"
- * when the question is "which scorer", and those come apart constantly: the
- * three-arm comparison in the README ran across two commits whose diff touched
- * only the repair loop and the eval harness, never the verifier. git_sha
- * correctly refused to call those arms identical, and was correctly ignored,
- * which is a sign the key is measuring the wrong thing.
- *
- * Hashing the files that actually compute the verdict makes the guarantee
- * precise: equal hash means every run was graded by byte-identical logic, and
- * a differing hash means the metric moved under you. git_sha is still recorded
- * for forensics — it's how you find the commit — but it no longer gates
- * anything.
- *
- * Reads source rather than importing, deliberately: the taxonomy is data, and
- * a hash over `JSON.stringify(TAXONOMY)` would miss a changed predicate while a
- * hash over the module's behaviour is not something you can take.
- */
-const SCORER_SOURCES = [
-  "apps/api/src/verify/constraints.ts", // the checks
-  "apps/api/src/verify/resolve.ts", // lemmatise -> taxonomy -> lexical fallback
-  "packages/shared/src/ingredients.ts", // the canonical taxonomy the checks consult
-  "packages/shared/src/constraints.ts", // Verification + the violation kinds
-];
+// The scorer hash now lives in verify/provenance.ts, beside the code it
+// hashes, because production turns record it too — and importing it from here
+// would drag the eval tables into the API's boot path. Re-exported so existing
+// eval callers keep their import.
+export { SCORER_HASH };
 
-function scorerHash(): string {
-  // .../apps/api/src/evals -> repo root
-  const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
-  const h = createHash("sha256");
-  try {
-    for (const rel of SCORER_SOURCES) {
-      h.update(rel); // a renamed file must move the hash even if its bytes don't
-      h.update(readFileSync(join(repoRoot, rel), "utf8"));
-    }
-  } catch {
-    // Running from a build output where the sources aren't shipped. Better to
-    // say so than to emit a hash of nothing that compares equal to everything.
-    return "unknown";
-  }
-  return h.digest("hex").slice(0, 8);
-}
-
-export const SCORER_HASH = scorerHash();
-
-/**
- * A content hash of the system prompt, recorded on every run.
- *
- * This is the piece that makes "did my prompt change help?" answerable. Without
- * it, results from before and after an edit are indistinguishable in the table
- * and you're comparing two numbers you can't attribute. Hashing rather than a
- * hand-maintained version string means it can never drift from reality — edit
- * one character and the hash moves on its own.
- */
-export function promptHash(): string {
-  return createHash("sha256").update(SYSTEM_PROMPT).digest("hex").slice(0, 8);
-}
+// Defined in llm/prompts.ts, beside the prompt it hashes, because production
+// turns record it too. Re-exported so eval callers keep their existing import.
+export { promptHash };
 
 export interface EvalRow {
   id: string;
@@ -290,6 +239,8 @@ export interface ConditionSummary {
   repair: number | null;
   git_shas: string;
   n: number;
+  /** Distinct fixtures behind those n runs — the clustering denominator. */
+  fixtures: number;
   passed: number;
   errors: number;
   pass_rate: number;
@@ -312,6 +263,10 @@ export function summariseByCondition(suiteId?: string): ConditionSummary[] {
               -- without splitting one arm into two rows.
               group_concat(DISTINCT git_sha)             AS git_shas,
               COUNT(*)                                   AS n,
+              -- Repeats of one fixture are not independent observations, so
+              -- the interval around a pass rate needs to know how many
+              -- distinct questions those runs actually asked. See evals/stats.
+              COUNT(DISTINCT fixture_id)                 AS fixtures,
               COALESCE(SUM(verification_ok = 1), 0)      AS passed,
               COALESCE(SUM(error_code IS NOT NULL), 0)   AS errors,
               COALESCE(AVG(verification_ok = 1), 0)      AS pass_rate,
