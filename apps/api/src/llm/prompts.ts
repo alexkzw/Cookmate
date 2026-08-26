@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { CookRequest } from "@cookmate/shared";
 
 /**
@@ -115,4 +116,22 @@ export function buildUserTurn(req: CookRequest): string {
   }
 
   return lines.join("\n");
+}
+
+/**
+ * A content hash of the system prompt.
+ *
+ * Lives here rather than in the eval harness because PRODUCTION needs it too.
+ * Recorded on every eval run AND every real turn, it is the key that makes
+ * "did my prompt change help?" answerable at all: without it, turns from before
+ * and after an edit are indistinguishable in the table and any difference
+ * between them is unattributable.
+ *
+ * Hashed rather than a hand-maintained version string, so it cannot drift from
+ * reality — edit one character of SYSTEM_PROMPT and the hash moves on its own,
+ * with no discipline required from the person making the edit. A version
+ * constant someone has to remember to bump is a version constant that is wrong.
+ */
+export function promptHash(): string {
+  return createHash("sha256").update(SYSTEM_PROMPT).digest("hex").slice(0, 8);
 }
