@@ -28,7 +28,14 @@ import {
   firstPassFailures,
   promptHash,
   SCORER_HASH,
+  type ConditionSummary,
 } from "./store.js";
+import {
+  clusteredWilson,
+  compareProportions,
+  bonferroniAlpha,
+  fmtInterval,
+} from "./stats.js";
 
 /**
  * CLI for the eval suite.
@@ -87,12 +94,16 @@ function report(suiteId?: string): void {
       scorer: c.scorer_hash ?? "?",
       n: c.n,
       passed: `${c.passed}/${c.n}`,
-      pass_rate: pct(c.pass_rate),
+      // The interval, not the point estimate. A bare "81%" from 36 runs invites
+      // a comparison the sample cannot support; "81% [65-91]" does not.
+      pass_rate: fmtInterval(clusteredWilson(c.passed, c.n, c.fixtures).optimistic),
       errors: c.errors,
       avg_cost: fmtUsd(c.avg_cost),
       avg_s: (c.avg_latency / 1000).toFixed(1),
     })),
   );
+
+  significance(conditions);
 
   const kinds = summariseByKind(suiteId);
   console.log("\nBY VIOLATION KIND — what actually broke");
@@ -150,6 +161,140 @@ function report(suiteId?: string): void {
 
 
 const fmtSigned = (n: number) => (n >= 0 ? `+${n.toFixed(2)}` : n.toFixed(2));
+
+/**
+ * IS THE DIFFERENCE REAL, OR IS IT THE DICE?
+ *
+ * Generation is stochastic, so every pass rate here is a sample. Two samples
+ * from an UNCHANGED system differ constantly — which means a table of point
+ * estimates invites exactly the mistake this section exists to stop: seeing
+ * 29/36 next to 26/36 and concluding something improved.
+ *
+ * Three things get printed and each answers a different question:
+ *   the interval        how precisely do I know this arm's rate?
+ *   the p-value         could this gap be chance?
+ *   the required n      how many runs would settle it, and what would that cost?
+ *
+ * The third is the one that makes an inconclusive result actionable instead of
+ * an invitation to run it again and hope.
+ */
+function significance(conditions: ConditionSummary[]): void {
+  console.log("\nSIGNIFICANCE — is the difference real, or is it the dice?");
+
+  if (conditions.length < 2) {
+    console.log("  (one condition — nothing to compare against)");
+    // Still worth saying how precisely we know the single rate we have.
+    const c = conditions[0];
+    if (c) {
+      const ci = clusteredWilson(c.passed, c.n, c.fixtures);
+      console.log(
+        `  ${c.model}/${c.effort}: ${fmtInterval(ci.optimistic)} ` +
+          `(clustered by fixture: ${fmtInterval(ci.conservative)})`,
+      );
+    }
+    return;
+  }
+
+  // Every pair, because "which arm is best" is a question about all of them.
+  const pairs: Array<[ConditionSummary, ConditionSummary]> = [];
+  for (let i = 0; i < conditions.length; i += 1)
+    for (let j = i + 1; j < conditions.length; j += 1) {
+      const a = conditions[i];
+      const b = conditions[j];
+      if (a && b) pairs.push([a, b]);
+    }
+
+  const alpha = bonferroniAlpha(pairs.length);
+  const label = (c: ConditionSummary) =>
+    `${c.model}/${c.effort} repair:${c.repair ? "on" : "off"} p:${c.prompt_hash}`;
+
+  /**
+   * Two rows can describe the SAME arm and still be separate rows: runs made
+   * before `scorer_hash` existed fall back to `git:<sha>` for grouping, and
+   * that over-splits across commits that never touched the verifier.
+   *
+   * Those pairs are not comparisons — the model, effort, repair setting and
+   * prompt are identical, so there is no treatment. What they measure is
+   * RUN-TO-RUN VARIANCE, which makes them the most useful rows in the table:
+   * they are an empirical answer to "how much do two identical configurations
+   * differ?", and any real effect has to clear that bar. Labelling them REAL or
+   * noise alongside genuine comparisons would be reading a control as a result.
+   */
+  const sameArm = (a: ConditionSummary, b: ConditionSummary): boolean =>
+    a.model === b.model &&
+    a.effort === b.effort &&
+    a.repair === b.repair &&
+    a.prompt_hash === b.prompt_hash;
+
+  console.table(
+    pairs.map(([a, b]) => {
+      const cmp = compareProportions(a.passed, a.n, b.passed, b.n);
+      const identical = sameArm(a, b);
+      return {
+        A: label(a),
+        B: label(b),
+        A_rate: `${a.passed}/${a.n}`,
+        B_rate: `${b.passed}/${b.n}`,
+        diff_pts: (cmp.diff * 100).toFixed(1),
+        p: cmp.p < 0.001 ? "<0.001" : cmp.p.toFixed(3),
+        verdict: identical ? "SAME ARM" : cmp.p < alpha ? "REAL" : "noise",
+        // What it would take to settle the ones that came back inconclusive.
+        n_needed: identical || cmp.nForObserved === null ? "—" : `${cmp.nForObserved}/arm`,
+      };
+    }),
+  );
+
+  // Run-to-run variance, read straight off the self-comparisons.
+  const controls = pairs.filter(([a, b]) => sameArm(a, b));
+  if (controls.length > 0) {
+    const spreads = controls.map(([a, b]) => Math.abs(a.passed / a.n - b.passed / b.n));
+    const worst = Math.max(...spreads);
+    console.log(
+      `\n  ${controls.length} pair${controls.length === 1 ? "" : "s"} above compare an arm ` +
+        `against ITSELF (identical model, effort, repair and prompt).`,
+    );
+    console.log(
+      `  Largest gap between two identical configurations: ${(worst * 100).toFixed(1)} points.`,
+    );
+    console.log(
+      "  Treat that as the noise floor — a change that moves the pass rate by less",
+    );
+    console.log("  than this has not been shown to do anything at all.");
+  }
+
+  console.log(
+    `  ${pairs.length} pairwise comparison${pairs.length === 1 ? "" : "s"}, ` +
+      `so the threshold is Bonferroni-corrected to alpha = ${alpha.toFixed(4)}.`,
+  );
+  console.log(
+    "  Reading `noise`: the data cannot distinguish these arms. That is not the",
+  );
+  console.log(
+    "  same as saying they are equal — it means this sample is too small to tell,",
+  );
+  console.log("  and n_needed says how much bigger it would have to be.");
+
+  // The clustering caveat, stated per condition rather than buried in a doc.
+  const clustered = conditions.filter((c) => c.fixtures > 0 && c.n > c.fixtures);
+  if (clustered.length > 0) {
+    console.log("\n  REPEATS ARE NOT INDEPENDENT SAMPLES.");
+    console.log(
+      "  Three runs of one fixture are three samples of the same question, so the",
+    );
+    console.log(
+      "  true precision sits between these two intervals. Where they disagree, the",
+    );
+    console.log("  conclusion rests on an assumption the data cannot support.");
+    for (const c of clustered) {
+      const ci = clusteredWilson(c.passed, c.n, c.fixtures);
+      console.log(
+        `    ${label(c)}\n` +
+          `      assuming independence (n=${c.n}):  ${fmtInterval(ci.optimistic)}\n` +
+          `      clustered by fixture (n=${c.fixtures}): ${fmtInterval(ci.conservative)}`,
+      );
+    }
+  }
+}
 
 function judgeReport(suiteId?: string): void {
   console.log(`\n=== quality judge · ${JUDGE_MODEL} · prompt ${judgePromptHash()} ===\n`);
