@@ -11,7 +11,7 @@
 # judgement this whole repo is built on.
 
 app = "cookmate"
-primary_region = "lhr"
+primary_region = "sin"
 
 [build]
   dockerfile = "Dockerfile"
