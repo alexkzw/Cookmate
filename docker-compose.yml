@@ -1,0 +1,72 @@
+# Local production-like run: `docker compose up --build`
+#
+# WHY THIS EXISTS WHEN THE APP ALREADY RUNS WITH `pnpm dev`
+#
+# `pnpm dev` runs TypeScript through tsx with hot reload, Vite on a second port,
+# and your Mac's filesystem. Production runs compiled JavaScript, on Linux, as a
+# non-root user, with the front end served by the API and a mounted volume for
+# the database. Those are different enough that "it works in dev" predicts very
+# little about the deploy.
+#
+# This file closes that gap on your laptop, where a mistake costs thirty seconds
+# instead of a rollback. Everything the container does wrong — a missing env
+# var, a permission error on the data directory, a server bound to the wrong
+# interface — fails here first, and fails identically.
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Same stamp the deploy uses, so /version is meaningful locally too.
+        GIT_SHA: ${GIT_SHA:-local}
+        BUILD_TIME: ${BUILD_TIME:-local}
+    image: cookmate:local
+    ports:
+      # host:container. The container half must match what the server binds,
+      # and the server must bind 0.0.0.0 — publishing a port to a process
+      # listening on 127.0.0.1 inside the container connects to nothing.
+      - "8787:8787"
+    environment:
+      NODE_ENV: production
+      PORT: 8787
+      HOST: 0.0.0.0
+      # Inside the container, not on your Mac. This path is where the volume
+      # below is mounted, which is what makes the data survive a rebuild.
+      DATABASE_PATH: /app/data/cookmate.db
+    env_file:
+      # Secrets are INJECTED at runtime, never baked into the image. The
+      # difference is not stylistic: an image layer containing a key is
+      # permanent and readable by anyone who can pull the image, and pushing
+      # one to a registry is how keys end up published.
+      - .env
+    volumes:
+      # A named volume, not a bind mount. The container's filesystem is
+      # discarded on every rebuild — an image is immutable by design — so
+      # anything written inside it is gone on the next deploy. State has to
+      # live somewhere the container's lifecycle does not reach.
+      - cookmate-data:/app/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8787/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+    # Restart on crash, but not on a clean exit — so a deliberate shutdown or a
+    # config error that exits(1) at boot does not become an infinite restart
+    # loop hammering the provider.
+    restart: unless-stopped
+    # Give the graceful shutdown room to finish. Compose's default is 10s,
+    # which is shorter than a single recipe generation — a deploy would SIGKILL
+    # streams the app was in the middle of draining properly.
+    stop_grace_period: 40s
+
+volumes:
+  cookmate-data:

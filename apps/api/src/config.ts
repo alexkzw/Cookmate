@@ -38,6 +38,16 @@ const EnvSchema = z.object({
   SUPABASE_JWKS_URL: z.string().url().optional(),
 
   PORT: z.coerce.number().int().default(8787),
+  /**
+   * Which interface to bind.
+   *
+   * Defaults to 0.0.0.0 because that is what any container needs: binding
+   * 127.0.0.1 inside a container makes the server reachable only from within
+   * that container, so a published port answers nothing and the failure looks
+   * like the app never started. Overridable for the rare case where you want
+   * loopback only — a host running behind a local reverse proxy.
+   */
+  HOST: z.string().default("0.0.0.0"),
   DATABASE_PATH: z.string().default("./data/cookmate.db"),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   DEV_ALLOW_ANONYMOUS: z

@@ -36,6 +36,18 @@ const SCORER_SOURCES = [
 ];
 
 function scorerHash(): string {
+  /**
+   * In a production image the scorer SOURCES ARE NOT SHIPPED — the runtime
+   * stage carries compiled JS only, deliberately, so there is nothing to hash.
+   * The build stamps the hash it computed into the image instead, which is
+   * strictly better: it records the scorer that produced this artifact rather
+   * than re-deriving it from whatever happens to be on disk.
+   *
+   * Same idea as GIT_SHA. Provenance belongs to the build, not the runtime.
+   */
+  const baked = process.env.SCORER_HASH;
+  if (baked && baked.length > 0) return baked;
+
   // .../apps/api/src/verify -> repo root
   const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
   const h = createHash("sha256");

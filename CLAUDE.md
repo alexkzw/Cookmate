@@ -102,6 +102,10 @@ test fixtures. Nothing silently drifted.
 | `apps/api/src/llm/prompts.ts` | Frozen system prompt (the cached prefix) |
 | `apps/api/src/llm/generate.ts` | Streaming + structured output |
 | `apps/api/src/telemetry/turns.ts` | Turn logging — built before the UI, on purpose |
+| `apps/api/src/limits/` | Admission control: rate limit, concurrency, cost caps |
+| `apps/api/src/evals/judge.ts` | The quality judge + calibration + length-bias probe |
+| `apps/api/src/mcp/server.ts` | MCP server — a second entry point, not a second service |
+| `apps/api/src/limits/policy.ts` | The admission policy, transport-agnostic |
 
 ---
 
@@ -117,6 +121,46 @@ ignored. Read them from the DB, always.
 via `.partial()` still parses to its default (`[]`), *not* `undefined`, which
 silently defeats a `?? readFromDatabase()` fallback. This caused a real bug (see
 below). Prefer `.omit()` when the client shouldn't send a field at all.
+
+**Display name and match key are different fields.** `IngredientSchema` carries
+both `name` ("ripe tomatoes, diced" — prose, for the card) and `matchTerm`
+("tomato" — canonical, for the verifier). They used to be one field, which cost
+twice: the card read like a database row, and matching was still free text. The
+verifier resolves `matchTerm` and *reports* `name`, and falls back to `name` when
+`matchTerm` is absent so recipes stored before the split stay replayable.
+
+**Follow-ups are re-generations, not chat.** `POST /api/chat/stream` takes an
+optional `followUpTo`; the server walks `parent_turn_id` back through `turns`,
+replays the stored user turns and recipe JSON as conversation history, and
+returns a **fully verified Recipe** — so every claim the verifier makes is as
+true on turn five as on turn one. History is bounded at 6 turns and scoped by
+`user_id` (an unguessable id is not an authorisation model).
+
+**Multi-turn is the best case for prompt caching, not a tax on it.** A
+conversation only ever *appends*, so history is a growing stable prefix. Two
+breakpoints: the frozen system block, and the last block of the newest turn.
+Single-turn requests get no second breakpoint at all — there is no prior
+conversation to read, so a marker would buy a write premium and nothing else.
+
+**TTLs must be non-increasing in render order** (`tools` → `system` →
+`messages`). The API rejects a 1h block that follows a 5m one, so 5m on the
+system block plus 1h on the tail — the arrangement that first shipped — is a
+400, and it only fires on the *second* follow-up because that is the first
+request carrying two breakpoints. The tail is the breakpoint that needs the
+longer life (the gap there is a person reading a recipe), so the system block is
+promoted to match rather than the tail cut down. Both are now **1h**, defined
+once as `CACHE_TTL` in `llm/generate.ts`. The cost is honest: a 1h write bills
+2× base against 1.25× for 5m, moving single-turn break-even from ~2 requests to
+~3, in exchange for a shared prefix that survives an hour of silence instead of
+five minutes. `buildPromptBlocks` is exported so the layout is asserted in unit
+tests — the API enforcing this at request time is the most expensive place to
+find out.
+
+**`turns.user_turn` records the prompt as rendered.** `pantry_json` records what
+we *meant* to send; `user_turn` records what we *did*. Without both, "the model
+ignored the pantry" and "the pantry never reached the model" are
+indistinguishable after the fact — and the second one is a bug this project has
+actually shipped.
 
 **Closed vocabularies beat fuzzy matching.** `equipment` is a Zod enum, so
 structured outputs make it impossible for the model to emit an unknown
@@ -182,6 +226,105 @@ rescued every time both report the same number. `first_pass_ok` and
 gap stays visible — and so does *what* repair fixed, since the final verdict on
 a repaired run is a pass and would otherwise be the only record.
 
+**Admission control: two mechanisms, because neither covers the other.** A
+rate limit bounds *burst* but not money — cost per turn is not constant, since
+the repair loop roughly doubles it. A cost cap bounds *spend* but not burst —
+concurrent requests all read the same under-cap total before any is billed. Both
+live in `limits/`, run after `requireAuth` (every limit is per-user) and before
+any model call. Checks are ordered cheapest first: concurrency and rate are map
+lookups, the caps are SQL, and a request the in-memory counters already refused
+should never reach the database.
+
+**Rate limiting is in memory; the cost cap is not.** Burst is a per-process
+concern, so a window in SQLite would add a write to every request's hot path to
+defend against a failure a single-process deployment doesn't have. Money spent
+must survive a restart, or a deploy loop becomes a way to reset the budget. The
+honest limit: N processes each enforce their own window, so the effective rate
+is N × limit — at which point the window moves to Redis and its interface
+doesn't change.
+
+**The cost of a call is unknown until ~26s after it starts**, so a cap reading
+only recorded spend is blind for the whole duration of every request it governs.
+`limits/budget.ts` reserves a pessimistic estimate up front and releases it when
+the true cost lands. Reservations are **leases, not locks** — they expire, so a
+process that dies mid-stream can't permanently consume someone's budget. The
+release happens in the *route's* `finally`, not the middleware's: `next()`
+returns when the stream **starts**, so releasing there would free the budget
+~26 seconds early and reopen the exact hole the reservation closes.
+
+**To prove a threshold, lower the limit — don't raise the load.** At ~$0.05 and
+26s a request, demonstrating a 10/min limit by generating traffic costs money and
+takes a minute. Booting with `RATE_LIMIT_PER_MINUTE=1` proves the same policy in
+two requests, and the refused one costs nothing because it never reaches the
+model. `pnpm measure:limits` does this; seeding a scratch DB with spend proves
+the cost cap for $0 as well. The inversion generalises: a threshold is cheapest
+to test from the side you control.
+
+**The quality judge is the one model-graded thing here, and that's deliberate.**
+The verifier can prove a recipe is *legal*; it cannot say whether it's *good*.
+Boiled pasta with salt passes all seven checks. `evals/judge.ts` scores appeal,
+technique and clarity on Haiku (different tier from the generator), blind to
+which arm produced the recipe, with a pinned model id — an unpinned judge
+silently redefines the metric. It reads stored `recipe_json`, so it costs
+pennies and asks the model to generate nothing.
+
+**A judge is worthless until it is calibrated, and length bias is testable.**
+`pnpm eval --label` records human scores *blind* (the judge's score is never
+shown — seeing it first measures your suggestibility, not its accuracy), and
+`--judge-report` prints mean absolute error plus the judge-minus-human bias,
+which separates "systematically generous" from "uncorrelated". The same report
+correlates score against `output_tokens`: the best-documented judge failure is
+mistaking verbosity for quality, and it's the easiest to test for if you kept
+the token counts. Neither number is proof — longer recipes may genuinely be
+better — but a big gap is where to go looking.
+
+**MCP is the supply side.** `apps/api/src/mcp/server.ts` makes Cookmate
+**callable by** an agent. It does not make Cookmate an agent — nothing in it
+chooses a tool or runs a loop. It is also not a second service: same Zod
+schemas, same `generateVerifiedRecipe`, same verifier, same turn log. If any of
+that were reimplemented there, the argument for one TypeScript codebase would
+collapse on the first drift.
+
+**A second entry point is a second way to bypass your limits.** An MCP call
+never touches Hono, so it never runs `enforceLimits` — which would have made
+stdio an unmetered door onto the expensive endpoint. The fix was structural:
+the policy moved to `limits/policy.ts` as a pure function and `middleware.ts`
+became a thin Hono adapter, so both doors call the same `decide()` and
+`reserve()`. **Keep the decision separate from the delivery; delivery mechanisms
+multiply.** Turns are logged from MCP too, or `/api/stats` would quietly
+under-report whatever arrived over stdio. Honest gap: the MCP server is a
+separate *process*, so it runs its own in-memory rate window — the cost caps are
+shared because they live in SQLite. Same trade as running two API processes.
+
+**Pass the schema, not its `.shape`.** `registerTool`'s `inputSchema` accepts
+either. `.shape` hands over the fields and **drops `.strict()`**, so an extra
+`pantry` key would be silently stripped rather than rejected — the exact
+"silently ignored" failure that caused the empty-pantry bug, arriving through a
+new door. Caught by a smoke test that asserted the error and got a recipe.
+
+**Identity over stdio is configuration, not a request field.** An MCP server is
+a subprocess of one client acting as one person, so `MCP_USER_ID` is pinned at
+boot and no tool accepts a user id. A tool that took one would let any caller
+read any kitchen by asking. Writing the pantry is deliberately **not exposed**:
+it is the evidence every recipe is verified against, so an agent appending to it
+wouldn't raise an error — it would produce recipes that pass against a kitchen
+the person doesn't have. Reads are cheap to be wrong about; writes to the
+evidence are not.
+
+**A tool response must describe its own evidence.** An MCP conversation is
+long-lived and the database isn't frozen: a client that called `get_pantry` ten
+minutes ago holds a stale snapshot, and without help it cannot tell "the kitchen
+changed" from "the tool is lying". Claude Desktop hit exactly this — it compared
+a correct recipe against a stale pantry, declared the tool unreliable, and wrote
+its own unverified recipe **containing chicken for a pescatarian user**. So
+`suggest_recipe` now returns `groundedIn` — the pantry, dietary and cookware it
+actually used — in both the prose and the structured payload. Same principle as
+the verifier reporting what it resolved rather than only whether it passed.
+
+That incident is also the best argument for the verifier there is: an agent
+discarded a *verified* answer in favour of an *unverified* one that broke a hard
+dietary constraint.
+
 **Hash the scorer, not the commit.** Eval rows carry `prompt_hash`,
 `fixture_set_hash` and `scorer_hash` — a content hash of `verify/*.ts` plus the
 ingredient taxonomy. `git_sha` used to do this job and over-fired: the three-arm
@@ -206,6 +349,18 @@ about it.
 
 ## Bugs already fixed (don't reintroduce)
 
+**A provider 400 was logged as `internal_error`.** The chat route derived its
+log code from `err instanceof RecipeGenerationError` while writing the properly
+classified code to the database, so the console and the turn log disagreed about
+the same failure and the console was the misleading one. Classify once, use it
+everywhere — whatever you log is what someone greps at 2am.
+
+**Cancelled requests were logged as provider failures.** `APIUserAbortError`
+*extends* `APIError`, so an `instanceof Anthropic.APIError` branch placed first
+swallowed it and every Stop press was recorded as `api_error` — inflating the
+one number you'd page on. Classify most-specific-first; the abort check now sits
+above the general branch, with a test.
+
 **The pantry never reached the verifier** (commit `c15e40b`). The chat route
 accepted an "optional" pantry via `.partial()`, which parsed to `[]` instead of
 `undefined`, defeating the `?? getPantry()` fallback. The web form compounded it
@@ -218,7 +373,7 @@ Regression tests cover both halves.
 
 ## Current state
 
-**Done:** streaming chat, structured recipe output, deterministic verification
+**Done:** streaming chat, **MCP server**, **multi-turn follow-ups**, structured recipe output, deterministic verification
 (ingredients, time, dislikes, dietary, servings, **cookware**), **active vs
 passive time**, canonical ingredient taxonomy + lemmatiser, pantry + preferences
 + cookware, turn telemetry with cost and cache status, `/api/stats` (including
@@ -229,6 +384,9 @@ provenance hashes, three measured arms.
 
 **Next up, in the order they were prioritised:**
 
+0. **Rate limiting + per-user daily cost cap** — done, see `limits/`. Left here
+   because the remaining gap is the UI: `/api/limits` is served but nothing
+   renders it, so a user still learns about the cap by being refused.
 1. **Repeat avoidance** — every turn's title and cuisine is already logged.
    Inject the last ~10 into the prompt as a constraint ("they've had stir-fry
    twice this week"). Nearly free, and it makes "learns you" true rather than a
@@ -241,8 +399,6 @@ provenance hashes, three measured arms.
    *collectively* fit one pantry. Genuine constraint satisfaction over a shared
    resource; no consumer app does this. This is the standout feature and the
    place where escalating to Opus 5 at high effort actually earns its cost.
-5. **MCP server** — expose `get_pantry` / `suggest_recipe` /
-   `add_to_shopping_list`. Can import these same Zod schemas.
 
 Deliberately **not** doing: real-time supermarket stock checking (no reliable
 API; substitutions + a shopping list serve the same need), quantity-aware pantry
@@ -263,6 +419,32 @@ cd apps/api && pnpm vitest run
 
 `DEV_ALLOW_ANONYMOUS=1` bypasses auth so the whole UI is buildable before the
 OAuth consent screen exists.
+
+### The MCP server
+
+```bash
+pnpm mcp          # stdio; diagnostics go to stderr because stdout IS the transport
+```
+
+To connect Claude Desktop, add to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "cookmate": {
+      "command": "pnpm",
+      "args": ["--dir", "/ABSOLUTE/PATH/TO/cookmate/apps/api", "mcp"],
+      "env": { "MCP_USER_ID": "your-supabase-user-id" }
+    }
+  }
+}
+```
+
+Five tools: `get_pantry`, `suggest_recipe`, `get_shopping_list`,
+`add_to_shopping_list`, `remove_from_shopping_list`. Each carries MCP
+annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`,
+`openWorldHint`) so a client can decide what needs confirming without guessing
+from the name.
 
 **Live generations cost real money.** Prefer unit tests and the boot smoke test;
 only make live calls when you're specifically validating model behaviour.

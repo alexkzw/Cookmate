@@ -1,0 +1,45 @@
+# Everything here is excluded from the build context — the tarball Docker sends
+# to the daemon before the first instruction runs. Two reasons it matters:
+#
+#   SPEED. node_modules in a pnpm monorepo is hundreds of megabytes of symlinks.
+#   Shipping it makes every build slower, and it is rebuilt inside the image
+#   anyway — for the correct platform, which the host copy is not.
+#
+#   SAFETY. `COPY . .` copies whatever is in the context. A .env in the context
+#   is an API key baked into an image layer, and layers are forever: deleting
+#   the file in a later instruction does NOT remove it, it is still readable
+#   with `docker history`. This file is the thing standing between a secret and
+#   a published image.
+
+node_modules
+**/node_modules
+
+# Build outputs — regenerated inside the image. Copying stale ones in risks
+# shipping an artifact nobody built from the source in this commit.
+dist
+**/dist
+*.tsbuildinfo
+
+# SECRETS. Never in an image.
+.env
+.env.*
+!.env.example
+
+# Local database and its WAL/shm sidecars. Production data lives on a mounted
+# volume, not in the image — an image is immutable and rebuilt constantly, so
+# anything written inside it is lost on the next deploy.
+data
+*.db
+*.db-wal
+*.db-shm
+
+.git
+.github
+.vscode
+.idea
+.DS_Store
+*.log
+coverage
+scratchpad
+README.md
+CLAUDE.md

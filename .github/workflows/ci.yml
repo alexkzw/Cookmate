@@ -1,17 +1,35 @@
 name: CI
 
-# "unit-tested in CI" - The 23 constraint tests are the product's actual claim, 
-# so a change that breaks them should never reach main quietly.
+# The pipeline is the gate between "it compiles on my laptop" and "it can ship".
+# Every step here answers a question that would otherwise be answered in
+# production:
+#
+#   typecheck  do the three consumers of the schema still agree?
+#   lint       is it consistent with the rest of the codebase?
+#   test       do the 124 tests — including the verifier, which IS the product
+#              claim — still pass?
+#   build      does the ARTIFACT exist and can Node actually run it?
+#   docker     does it build and BOOT in the environment it will run in?
+#
+# The last two are the ones people skip, and they are the ones that catch
+# deployment failures. `pnpm build` passed for months here while producing a
+# server that could not start, because nothing ever ran what it produced.
 
 on:
   push:
     branches: [main]
   pull_request:
 
+# A new push makes the previous run's answer irrelevant. Cancelling it frees a
+# runner and stops two builds racing to report on the same branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
+    name: Typecheck, lint, test
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
@@ -29,6 +47,12 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      # BEFORE typecheck, not after. `@cookmate/shared` resolves through its
+      # `exports` map to dist/, so its declaration files must exist before
+      # anything that imports it can be checked.
+      - name: Build
+        run: pnpm build
+
       - name: Typecheck
         run: pnpm typecheck
 
@@ -40,3 +64,83 @@ jobs:
       # so CI costs nothing and can't be flaky on someone else's uptime.
       - name: Test
         run: pnpm test
+
+      # The check that would have caught the broken build. Compiling is not the
+      # same as producing something that runs, and only this step knows the
+      # difference.
+      - name: Server artifact starts
+        run: |
+          node apps/api/dist/index.js &
+          PID=$!
+          for i in $(seq 1 20); do
+            curl -sf localhost:8787/health && break || sleep 1
+          done
+          curl -sf localhost:8787/health || (echo "server never became healthy"; kill $PID; exit 1)
+          kill $PID
+        env:
+          ANTHROPIC_API_KEY: sk-ant-fake-key-for-boot-check
+          DEV_ALLOW_ANONYMOUS: "1"
+          DATABASE_PATH: ./ci.db
+
+  docker:
+    name: Image builds and boots
+    runs-on: ubuntu-latest
+    # Only after the cheap checks pass. A container build takes minutes; there
+    # is no reason to spend them on a branch that does not typecheck.
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # Load into the local daemon rather than pushing — this job proves the
+          # image works. Publishing is a separate concern with separate
+          # credentials, and keeping them apart means a PR from a fork can be
+          # built but can never push.
+          load: true
+          tags: cookmate:ci
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            BUILD_TIME=${{ github.event.repository.updated_at }}
+          # Reuse layers between runs, so an unchanged dependency tree is not
+          # reinstalled and recompiled on every commit.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # A built image is not a working image. This is the smoke test: start the
+      # container exactly as production will, and require it to answer.
+      - name: Container boots and serves
+        run: |
+          docker run -d --name smoke -p 8787:8787 \
+            -e ANTHROPIC_API_KEY=sk-ant-fake-key-for-boot-check \
+            -e DEV_ALLOW_ANONYMOUS=1 \
+            -e DATABASE_PATH=/app/data/cookmate.db \
+            cookmate:ci
+          for i in $(seq 1 30); do
+            curl -sf localhost:8787/health >/dev/null && break || sleep 2
+          done
+          echo "--- /health ---";  curl -sf localhost:8787/health  || (docker logs smoke; exit 1)
+          echo "--- /ready ---";   curl -sf localhost:8787/ready   || (docker logs smoke; exit 1)
+          echo "--- /version ---"; curl -sf localhost:8787/version || (docker logs smoke; exit 1)
+          # The front end is served by the API in production, so a 200 here also
+          # proves the web build made it into the image.
+          curl -sf -o /dev/null localhost:8787/ || (docker logs smoke; exit 1)
+
+      # Proves the SIGTERM handler runs. Without it the container would sit
+      # until Docker's 10s timeout and then be killed — and every deploy would
+      # drop in-flight recipe generations that had already been paid for.
+      - name: Shuts down gracefully
+        run: |
+          START=$(date +%s)
+          docker stop --timeout 40 smoke
+          ELAPSED=$(( $(date +%s) - START ))
+          docker logs smoke 2>&1 | tail -20
+          docker logs smoke 2>&1 | grep -q "all requests drained" \
+            || (echo "graceful shutdown did not complete"; exit 1)
+          # A handled SIGTERM exits in well under a second. Anything near the
+          # 40s timeout means Docker resorted to SIGKILL.
+          [ "$ELAPSED" -lt 15 ] || (echo "took ${ELAPSED}s — SIGTERM was likely ignored"; exit 1)

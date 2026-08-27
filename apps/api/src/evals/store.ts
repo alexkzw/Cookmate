@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { db, addColumnIfMissing } from "../db/index.js";
 import { promptHash } from "../llm/prompts.js";

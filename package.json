@@ -12,7 +12,10 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint .",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test",
+    "docker:build": "docker build -t cookmate:local --build-arg GIT_SHA=$(git rev-parse --short HEAD) --build-arg BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) .",
+    "docker:run": "docker compose up --build",
+    "docker:smoke": "bash scripts/smoke.sh"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",
@@ -20,8 +23,7 @@
     "eslint": "^9.39.5",
     "globals": "^17.10.0",
     "typescript": "^5.7.0",
-    "typescript-eslint": "^8.67.0",
-    "wink-lemmatizer": "^3.0.4"
+    "typescript-eslint": "^8.67.0"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

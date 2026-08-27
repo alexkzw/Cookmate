@@ -1,0 +1,84 @@
+# Fly.io deployment. `fly deploy` reads this file.
+#
+# WHY FLY RATHER THAN AWS/GCP
+# For a single containerised service, the managed platforms (Fly, Railway,
+# Render) do in one file what ECS or GKE need a hundred lines of Terraform for:
+# build the image, run it, terminate TLS, route a domain, roll deploys, restart
+# on crash. The concepts are IDENTICAL — health checks, secrets, rolling
+# updates, resource limits — so nothing learned here is wasted if the next job
+# runs Kubernetes. What you give up is fine-grained control you would not use
+# yet. Choosing the smallest thing that meets the requirement is the same
+# judgement this whole repo is built on.
+
+app = "cookmate"
+primary_region = "lhr"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # Non-secret configuration lives here in version control, where a reviewer can
+  # see it. Secrets do NOT — see the note under [http_service].
+  PORT = "8787"
+  HOST = "0.0.0.0"
+  NODE_ENV = "production"
+  # On the mounted volume, not the image filesystem. An image is immutable and
+  # replaced on every deploy; anything written inside it is gone.
+  DATABASE_PATH = "/data/cookmate.db"
+
+[http_service]
+  internal_port = 8787
+  # TLS termination and an HTTPS redirect, handled by the platform. Worth
+  # knowing what it is doing for you: certificate issuance and renewal, HTTP/2,
+  # and the fact that your app speaks plain HTTP internally and never sees a
+  # certificate.
+  force_https = true
+
+  # ---- THE SQLITE CONSTRAINT, STATED HONESTLY ----
+  # A Fly volume attaches to exactly ONE machine. SQLite is a file, so the app
+  # cannot scale horizontally without changing the database — two instances
+  # would each hold their own copy and silently diverge.
+  #
+  # This is not a limitation discovered here; it is the one already documented
+  # in CLAUDE.md, made concrete. The in-memory rate limiter has the same shape:
+  # N processes enforce N separate windows, so the effective limit is N x limit.
+  # Both are fixed by the same migration — Postgres for the data, Redis for the
+  # window — and neither is worth doing before there is traffic to justify it.
+  #
+  # Pinning to one machine makes the constraint explicit rather than letting an
+  # autoscaler discover it in production.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    # READINESS — decides whether this machine receives traffic. It is also what
+    # makes a deploy zero-downtime: the new machine gets no requests until it
+    # answers 200, and the old one is drained rather than dropped.
+    path = "/ready"
+    interval = "15s"
+    timeout = "3s"
+    grace_period = "10s"
+    method = "GET"
+
+[[vm]]
+  # 1GB because generation is I/O-bound waiting on the model API, not CPU-bound.
+  # The one thing that genuinely needs memory here is the better-sqlite3 build,
+  # and that happens in CI, not at runtime.
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1
+
+[mounts]
+  source = "cookmate_data"
+  destination = "/data"
+
+[deploy]
+  # Rolling, not immediate: bring up the new machine, wait for /ready, then
+  # retire the old one. With one machine this still means a brief overlap
+  # rather than a gap.
+  strategy = "rolling"
+  # Must exceed the app's own 30s drain window in src/index.ts, or the platform
+  # SIGKILLs a process that was shutting down properly — which is precisely the
+  # failure the graceful shutdown exists to prevent.
+  wait_timeout = "5m"
