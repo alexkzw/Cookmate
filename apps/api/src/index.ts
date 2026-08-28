@@ -15,6 +15,13 @@ import { db } from "./db/index.js"; // importing runs migrations at boot
 import { promptHash } from "./llm/prompts.js";
 import { SCORER_HASH } from "./verify/provenance.js";
 import { providerBreaker } from "./limits/breaker.js";
+import {
+  beginWork,
+  beginDraining,
+  isDraining,
+  inFlightCount,
+  waitForDrain,
+} from "./lifecycle.js";
 
 const app = new Hono();
 
@@ -53,16 +60,19 @@ app.use(
  * is half done. Killing the process the instant a deploy starts would bill the
  * user for a recipe they never receive — and the turn row would be left open,
  * so the telemetry would record a generation that simply stops existing.
+ *
+ * This middleware covers ORDINARY routes only, and that limit is deliberate:
+ * `await next()` resolves when the handler returns, which for a streamed route
+ * is when the stream STARTS, not when it ends. `POST /api/chat/stream` therefore
+ * registers its own work from inside the stream callback — see lifecycle.ts for
+ * the bug that taught this, and routes/chat.ts for where it is done.
  */
-let inFlight = 0;
-let draining = false;
-
 app.use("*", async (c, next) => {
-  inFlight += 1;
+  const done = beginWork();
   try {
     await next();
   } finally {
-    inFlight -= 1;
+    done();
   }
 });
 
@@ -88,8 +98,8 @@ app.get("/health", (c) => c.json({ ok: true, uptimeSeconds: Math.round(process.u
  * and the existing streams get to finish.
  */
 app.get("/ready", (c) => {
-  if (draining) {
-    return c.json({ ready: false, reason: "shutting_down", inFlight }, 503);
+  if (isDraining()) {
+    return c.json({ ready: false, reason: "shutting_down", inFlight: inFlightCount() }, 503);
   }
   try {
     // Cheapest possible proof that the database file is open and answering.
@@ -102,7 +112,7 @@ app.get("/ready", (c) => {
   }
   return c.json({
     ready: true,
-    inFlight,
+    inFlight: inFlightCount(),
     // The breaker's view of the upstream. Not a reason to fail readiness — the
     // app still serves the pantry, the shopping list and /api/stats during a
     // provider outage — but it is the first thing you want when a deploy looks
@@ -224,29 +234,46 @@ const server = serve(
  * finished or not, so the timeout must sit INSIDE that window — otherwise the
  * careful shutdown is interrupted by the thing it was meant to pre-empt.
  */
-const SHUTDOWN_GRACE_MS = 30_000; // Fly/K8s default is 30s; stay under it.
-const POLL_MS = 250;
+/**
+ * How long to wait for in-flight work before giving up.
+ *
+ * 60s, sized from THIS APP'S measured latency rather than a round number. The
+ * eval suite puts sonnet+repair at 26.1s average and 46.1s worst observed, so a
+ * turn that is repairing when the signal lands needs most of a minute. A 30s
+ * window would cut those off — the expensive ones, which are exactly the turns
+ * worth protecting.
+ *
+ * THIS NUMBER IS ONLY MEANINGFUL IF THE PLATFORM ALLOWS IT. An earlier version
+ * said "Fly/K8s default is 30s; stay under it", which was wrong: Fly's
+ * `kill_timeout` defaults to FIVE seconds. The app drained politely for 10s and
+ * the VM was destroyed underneath it, leaving the volume to recover its journal
+ * on next boot. fly.toml now sets `kill_timeout = '75s'` so this window fits
+ * inside the platform's, with room for the database close.
+ *
+ * If you change this, change fly.toml too. They are one decision expressed in
+ * two files, and the failure when they disagree is silent.
+ */
+const SHUTDOWN_GRACE_MS = 60_000;
 
 let shuttingDown = false;
 
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return; // a second Ctrl-C must not race the first
   shuttingDown = true;
-  draining = true;
+  beginDraining();
 
-  console.log(`[shutdown] ${signal} received · ${inFlight} request(s) in flight`);
+  console.log(`[shutdown] ${signal} received · ${inFlightCount()} request(s) in flight`);
 
   server.close(() => console.log("[shutdown] stopped accepting connections"));
 
-  const deadline = Date.now() + SHUTDOWN_GRACE_MS;
-  while (inFlight > 0 && Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, POLL_MS));
-  }
+  const drained = await waitForDrain(SHUTDOWN_GRACE_MS);
 
-  if (inFlight > 0) {
+  if (!drained) {
     // Say so rather than exiting quietly. A truncated stream that nobody
     // recorded is indistinguishable from a bug in the model call.
-    console.warn(`[shutdown] grace period expired with ${inFlight} request(s) still running`);
+    console.warn(
+      `[shutdown] grace period expired with ${inFlightCount()} request(s) still running`,
+    );
   } else {
     console.log("[shutdown] all requests drained");
   }
