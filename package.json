@@ -15,7 +15,9 @@
     "test": "pnpm -r test",
     "docker:build": "docker build -t cookmate:local --build-arg GIT_SHA=$(git rev-parse --short HEAD) --build-arg BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) .",
     "docker:run": "docker compose up --build",
-    "docker:smoke": "bash scripts/smoke.sh"
+    "docker:smoke": "bash scripts/smoke.sh",
+    "fly:deploy": "fly deploy --build-arg GIT_SHA=\"$(git rev-parse --short HEAD)$(git diff --quiet HEAD 2>/dev/null || echo -dirty)\" --build-arg BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+    "demo:drain": "bash scripts/demo-drain.sh"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",
