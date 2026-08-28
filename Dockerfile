@@ -79,6 +79,33 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
 # ---- Source layer ---------------------------------------------------
 COPY . .
 
+# ---- Front-end build-time configuration -----------------------------
+# Vite substitutes `import.meta.env.VITE_*` at BUILD time and bakes the values
+# into the JS bundle. They are therefore properties of the ARTIFACT, not of the
+# runtime — setting them as Fly secrets would do nothing at all, because by the
+# time the container starts the bundle has already been written.
+#
+# THIS IS NOT A SECRET LEAK, and the distinction is worth being precise about.
+# Supabase's anon key is public by design: it ships to every browser that loads
+# the page, which is the entire point of it. Row-Level Security is what protects
+# the data, not the secrecy of this key. Contrast ANTHROPIC_API_KEY, which is
+# server-side only and is injected at runtime via `fly secrets` precisely
+# because it must never reach a browser or an image layer.
+#
+# If these are absent the app still builds and runs — `lib/supabase.ts` treats
+# an unconfigured client as "auth off" and falls back to local mode. That is
+# deliberate for local development, and it is also why `/version` reports
+# `authMode`: a silently unauthenticated deploy is exactly the failure this
+# arrangement could otherwise hide.
+# BuildKit warns `SecretsUsedInArgOrEnv` on the second one. That check matches
+# on the NAME containing "KEY" and is a false positive here — see above for why
+# a Supabase anon key is not a secret. Worth knowing the warning exists and why
+# it does not apply, rather than being surprised by it in a build log.
+ARG VITE_SUPABASE_URL=""
+ARG VITE_SUPABASE_ANON_KEY=""
+ENV VITE_SUPABASE_URL=${VITE_SUPABASE_URL}
+ENV VITE_SUPABASE_ANON_KEY=${VITE_SUPABASE_ANON_KEY}
+
 # Build order matters and pnpm handles it: `pnpm -r build` walks the workspace
 # in topological order, so `@cookmate/shared` compiles before the API and the
 # web app that import it.
@@ -193,7 +220,13 @@ WORKDIR /app/apps/api
 # /bin/sh -c, and the shell does not forward signals to its child — so the
 # graceful shutdown code would never run and every deploy would hard-kill
 # in-flight recipe generations.
-ENTRYPOINT ["/usr/bin/tini", "--"]
+# `-s` registers tini as a child subreaper. Without it, tini warns on any
+# platform where it is NOT PID 1 — which is every Fly machine, because Fly's own
+# init takes PID 1 and runs tini as its child. The warning is accurate: a tini
+# that is not PID 1 and not a subreaper reaps nothing. Fly's init does that job
+# regardless, but the flag makes the image behave correctly on both platforms
+# instead of silently depending on which one it landed on.
+ENTRYPOINT ["/usr/bin/tini", "-s", "--"]
 # The scorer hash is read from the file the builder wrote and exported into the
 # environment before Node starts. A tiny shell wrapper rather than a build ARG
 # because the value is only known after `pnpm -r build` has run.
