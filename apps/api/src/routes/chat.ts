@@ -9,6 +9,7 @@ import { RecipeGenerationError } from "../llm/generate.js";
 import { generateVerifiedRecipe } from "../llm/verified.js";
 import { classifyError, severityOf } from "../llm/errors.js";
 import { providerBreaker } from "../limits/breaker.js";
+import { beginWork } from "../lifecycle.js";
 import { openTurn, completeTurn, failTurn, conversationHistory } from "../telemetry/turns.js";
 import { buildUserTurn } from "../llm/prompts.js";
 
@@ -94,6 +95,24 @@ chatRoutes.post("/stream", requireAuth, enforceLimits, async (c) => {
   const turnId = openTurn(user.id, request, { userTurn, parentTurnId: followUpTo ?? null });
 
   return streamSSE(c, async (sse) => {
+    /**
+     * Register this generation as in-flight work, HERE and not in middleware.
+     *
+     * The middleware in index.ts wraps `await next()`, which for a streamed
+     * route resolves the moment the stream is established — Hono's logger
+     * records this endpoint as finishing in ~25ms while the model call runs for
+     * another ~26 seconds. Counting there made the shutdown drain believe
+     * nothing was running and exit immediately, killing the exact long-lived
+     * streams it exists to protect. Found by restarting a Fly machine during a
+     * live generation: `0 request(s) in flight`, and the client got
+     * INTERNAL_ERROR mid-stream.
+     *
+     * This callback's lifetime IS the work's lifetime, which is why the
+     * registration belongs in it. Same reasoning, same place, and now the same
+     * `finally` as the budget lease below.
+     */
+    const doneWork = beginWork();
+
     const send = (event: StreamEvent) => sse.writeSSE({ data: JSON.stringify(event) });
 
     await send({ type: "start", turnId });
@@ -193,11 +212,16 @@ chatRoutes.post("/stream", requireAuth, enforceLimits, async (c) => {
       // Everything needed to diagnose the failure is already on that row.
       await send({ type: "error", message, code: info.code, turnId });
     } finally {
-      // Must be here, not in the middleware. `next()` returns when the stream
-      // STARTS, so releasing there would free the budget ~26 seconds before the
-      // call it is accounting for actually finishes — reopening exactly the
-      // concurrency hole the reservation exists to close.
+      // BOTH of these must be here, not in the middleware, for the same reason:
+      // `next()` returns when the stream STARTS, so releasing either one there
+      // frees it ~26 seconds before the work it accounts for actually finishes.
+      //
+      // For the budget that reopened the concurrency hole the reservation
+      // exists to close. For the shutdown counter it made the drain exit while
+      // a generation was still streaming. Same misunderstanding, two mechanisms,
+      // and the second one was only caught by restarting a live Fly machine.
       releaseBudget();
+      doneWork();
     }
   });
 });
