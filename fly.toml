@@ -1,84 +1,161 @@
 # Fly.io deployment. `fly deploy` reads this file.
 #
+# NOTE: `fly launch` regenerates this file and strips comments. If you re-run it,
+# re-add these — the reasoning is the part worth keeping.
+#
 # WHY FLY RATHER THAN AWS/GCP
 # For a single containerised service, the managed platforms (Fly, Railway,
 # Render) do in one file what ECS or GKE need a hundred lines of Terraform for:
 # build the image, run it, terminate TLS, route a domain, roll deploys, restart
 # on crash. The concepts are IDENTICAL — health checks, secrets, rolling
 # updates, resource limits — so nothing learned here is wasted if the next job
-# runs Kubernetes. What you give up is fine-grained control you would not use
-# yet. Choosing the smallest thing that meets the requirement is the same
-# judgement this whole repo is built on.
+# runs Kubernetes. Choosing the smallest thing that meets the requirement is the
+# same judgement this whole repo is built on.
 
-app = "cookmate"
-primary_region = "sin"
+app = 'cookmate'
+primary_region = 'sin'
+
+# ---- HOW LONG THE PLATFORM WAITS BEFORE FORCING A KILL ----
+#
+# These two exist because the deploy demo caught the app being killed mid-drain,
+# and the cause was an assumption written as a comment and never checked.
+#
+# Fly's shutdown sequence is: send `kill_signal`, wait `kill_timeout`, then send
+# SIGTERM unconditionally, then kill the VM. The DEFAULT kill_timeout is FIVE
+# SECONDS — not the 30 that src/index.ts originally assumed. Observed on
+# 2026-08-28: SIGINT at 03:58:25, SIGTERM at 03:58:30, `Virtual machine exited
+# abruptly` at 03:58:35, and `/dev/vdc: recovering journal` on the next boot
+# because the volume never got unmounted cleanly.
+#
+# So the app was configured to drain for up to 30s on a platform that allowed 5.
+# The graceful shutdown ran, said the right things, and was killed anyway.
+#
+# 75s is chosen to sit ABOVE the app's own 60s drain window plus the database
+# close, so the app always finishes first and the platform's hard kill is never
+# the thing that ends the process. The ordering is the whole point: your bound
+# must be the tighter one, or it is not a bound at all.
+kill_timeout = '75s'
+
+# Explicit rather than relying on the default. Fly sends SIGINT; Docker sends
+# SIGTERM. src/index.ts handles both, which is why the drain ran at all — but
+# stating it means the next reader does not have to discover it from a log line.
+kill_signal = 'SIGINT'
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = 'Dockerfile'
 
-[env]
-  # Non-secret configuration lives here in version control, where a reviewer can
-  # see it. Secrets do NOT — see the note under [http_service].
-  PORT = "8787"
-  HOST = "0.0.0.0"
-  NODE_ENV = "production"
-  # On the mounted volume, not the image filesystem. An image is immutable and
-  # replaced on every deploy; anything written inside it is gone.
-  DATABASE_PATH = "/data/cookmate.db"
-
-[http_service]
-  internal_port = 8787
-  # TLS termination and an HTTPS redirect, handled by the platform. Worth
-  # knowing what it is doing for you: certificate issuance and renewal, HTTP/2,
-  # and the fact that your app speaks plain HTTP internally and never sees a
-  # certificate.
-  force_https = true
-
-  # ---- THE SQLITE CONSTRAINT, STATED HONESTLY ----
-  # A Fly volume attaches to exactly ONE machine. SQLite is a file, so the app
-  # cannot scale horizontally without changing the database — two instances
-  # would each hold their own copy and silently diverge.
+  # Front-end configuration, baked into the JS bundle at BUILD time.
   #
-  # This is not a limitation discovered here; it is the one already documented
-  # in CLAUDE.md, made concrete. The in-memory rate limiter has the same shape:
-  # N processes enforce N separate windows, so the effective limit is N x limit.
-  # Both are fixed by the same migration — Postgres for the data, Redis for the
-  # window — and neither is worth doing before there is traffic to justify it.
+  # These live here rather than in `fly secrets` because Vite substitutes
+  # `import.meta.env.VITE_*` during `pnpm -r build`. By the time a container
+  # starts, the bundle is already written — a runtime env var would change
+  # nothing. They are properties of the ARTIFACT, not of the runtime.
   #
-  # Pinning to one machine makes the constraint explicit rather than letting an
-  # autoscaler discover it in production.
-  auto_stop_machines = false
-  auto_start_machines = true
-  min_machines_running = 1
-
-  [[http_service.checks]]
-    # READINESS — decides whether this machine receives traffic. It is also what
-    # makes a deploy zero-downtime: the new machine gets no requests until it
-    # answers 200, and the old one is drained rather than dropped.
-    path = "/ready"
-    interval = "15s"
-    timeout = "3s"
-    grace_period = "10s"
-    method = "GET"
-
-[[vm]]
-  # 1GB because generation is I/O-bound waiting on the model API, not CPU-bound.
-  # The one thing that genuinely needs memory here is the better-sqlite3 build,
-  # and that happens in CI, not at runtime.
-  memory = "1gb"
-  cpu_kind = "shared"
-  cpus = 1
-
-[mounts]
-  source = "cookmate_data"
-  destination = "/data"
+  # Committing them is correct, not a leak. Supabase's anon key is public by
+  # design: it ships to every browser that loads the page, which is the entire
+  # point of it. Row-Level Security protects the data; key secrecy does not, and
+  # never did. Contrast ANTHROPIC_API_KEY — server-side only, never in a bundle
+  # or an image layer, injected at runtime via `fly secrets set`. Two keys, two
+  # threat models, two mechanisms.
+  #
+  # Fill these from apps/web/.env. Left blank, the app deploys with auth OFF and
+  # falls back to anonymous mode — which is why `/version` reports `authMode`.
+  # A silently unauthenticated deploy is exactly the failure this could hide.
+  [build.args]
+    VITE_SUPABASE_URL = ''
+    VITE_SUPABASE_ANON_KEY = ''
 
 [deploy]
   # Rolling, not immediate: bring up the new machine, wait for /ready, then
-  # retire the old one. With one machine this still means a brief overlap
-  # rather than a gap.
-  strategy = "rolling"
+  # retire the old one.
+  strategy = 'rolling'
   # Must exceed the app's own 30s drain window in src/index.ts, or the platform
-  # SIGKILLs a process that was shutting down properly — which is precisely the
-  # failure the graceful shutdown exists to prevent.
-  wait_timeout = "5m"
+  # SIGKILLs a process that was shutting down properly — precisely the failure
+  # the graceful shutdown exists to prevent.
+  wait_timeout = '5m0s'
+
+[env]
+  # Non-secret configuration lives here in version control, where a reviewer can
+  # see it. Secrets go through `fly secrets set` and never appear in this file.
+  #
+  # DATABASE_PATH points at the mounted volume, not the image filesystem. An
+  # image is immutable and replaced on every deploy; anything written inside it
+  # is gone.
+  DATABASE_PATH = '/data/cookmate.db'
+  # 0.0.0.0, never 127.0.0.1 — inside a container, loopback is reachable only
+  # from within that container, so a published port would answer nothing.
+  HOST = '0.0.0.0'
+  NODE_ENV = 'production'
+  PORT = '8787'
+
+[[mounts]]
+  # State has to live somewhere the container's lifecycle does not reach.
+  source = 'cookmate_data'
+  destination = '/data'
+
+[http_service]
+  internal_port = 8787
+  # TLS termination and an HTTPS redirect, handled by the platform: certificate
+  # issuance and renewal, HTTP/2, and the fact that the app speaks plain HTTP
+  # internally and never sees a certificate.
+  force_https = true
+
+  # ---- THE SQLITE CONSTRAINT, STATED HONESTLY ----
+  # A Fly volume attaches to exactly ONE machine. SQLite is a file, so this
+  # cannot scale HORIZONTALLY without changing the database — two instances
+  # would each hold their own copy and silently diverge. The in-memory rate
+  # limiter has the same shape: N processes enforce N separate windows.
+  #
+  # Both are fixed by the same migration — Postgres for the data, Redis for the
+  # window — and neither is worth doing before there is traffic to justify it.
+  # Never `fly scale count 2` against this config; that is the divergence.
+  #
+  # ---- SCALE TO ZERO ON IDLE, WHICH IS A DIFFERENT AXIS ----
+  # The constraint above is about running SEVERAL machines at once. Stopping the
+  # single machine when nobody is using it is unrelated: same machine, same host,
+  # same volume, just not burning CPU time between visits. There is nothing to
+  # diverge from.
+  #
+  # This is a demo with genuinely bursty traffic — days of nothing, then a few
+  # minutes of attention. Paying ~$6.65/month for a machine that is idle 99.9%
+  # of the time is the wrong trade; `stop` drops that to the volume's $0.15
+  # while keeping the URL permanently live.
+  #
+  # The cost is a COLD START: the first request after an idle period waits a few
+  # seconds for the machine to boot, Node to start and SQLite to open. Acceptable
+  # for a demo, and cheap to hide — curl the URL once before showing anyone.
+  # It would not be acceptable for a latency-sensitive production service, which
+  # is exactly the kind of trade worth being able to name.
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    # READINESS — decides whether this machine receives traffic.
+    #
+    # HONEST CORRECTION, learned by actually deploying: this does NOT buy
+    # zero-downtime here. Zero-downtime deploys need N>1 machines, so the new
+    # one can serve while the old one drains — and a Fly volume attaches to
+    # exactly one machine, so N>1 is the SQLite constraint above. A deploy or
+    # restart therefore stops this machine and starts it again, and Fly logs
+    # `Health check ... has failed` for the ~6s gap. That is real downtime, and
+    # the log line is telling the truth.
+    #
+    # What the check still buys, which is not nothing: traffic is not routed to
+    # the machine until the app actually answers 200. The gap is a brief refusal
+    # rather than a stretch of requests hitting a process that is still booting.
+    # Removing the SQLite constraint is what would remove the gap.
+    interval = '15s'
+    timeout = '3s'
+    grace_period = '10s'
+    method = 'GET'
+    path = '/ready'
+
+[[vm]]
+  # 1GB because generation is I/O-bound waiting on the model API, not CPU-bound.
+  # The one thing that genuinely needs memory is the better-sqlite3 build, and
+  # that happens at build time, not at runtime.
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 1024
