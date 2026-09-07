@@ -59,8 +59,8 @@ kill_signal = 'SIGINT'
   # threat models, two mechanisms.
   #
   [build.args]
-    VITE_SUPABASE_URL = https://adlrnfpytibhxtmxukuz.supabase.co
-    VITE_SUPABASE_ANON_KEY = sb_publishable_J7nuqILDY-5Ku9FneLBU_w_-L5i5m66
+    VITE_SUPABASE_URL = 'https://adlrnfpytibhxtmxukuz.supabase.co'
+    VITE_SUPABASE_ANON_KEY = 'sb_publishable_J7nuqILDY-5Ku9FneLBU_w_-L5i5m66'
 
 [deploy]
   # Rolling, not immediate: bring up the new machine, wait for /ready, then
