@@ -58,12 +58,9 @@ kill_signal = 'SIGINT'
   # or an image layer, injected at runtime via `fly secrets set`. Two keys, two
   # threat models, two mechanisms.
   #
-  # Fill these from apps/web/.env. Left blank, the app deploys with auth OFF and
-  # falls back to anonymous mode — which is why `/version` reports `authMode`.
-  # A silently unauthenticated deploy is exactly the failure this could hide.
   [build.args]
-    VITE_SUPABASE_URL = ''
-    VITE_SUPABASE_ANON_KEY = ''
+    VITE_SUPABASE_URL = https://adlrnfpytibhxtmxukuz.supabase.co
+    VITE_SUPABASE_ANON_KEY = sb_publishable_J7nuqILDY-5Ku9FneLBU_w_-L5i5m66
 
 [deploy]
   # Rolling, not immediate: bring up the new machine, wait for /ready, then
