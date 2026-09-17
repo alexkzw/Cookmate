@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "eval": "tsx --env-file=../../.env src/evals/run.ts",
+    "eval:plan": "tsx --env-file=../../.env src/evals/plan-run.ts",
     "measure:limits": "tsx --env-file=../../.env scripts/measure-limits.ts",
     "mcp": "tsx --env-file=../../.env src/mcp/server.ts"
   },
