@@ -14,6 +14,29 @@ const EnvSchema = z.object({
   RECIPE_MODEL: z.string().default("claude-sonnet-5"),
   RECIPE_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("medium"),
 
+  /**
+   * THE MEAL PLANNER RUNS A DIFFERENT MODEL FROM THE RECIPE WRITER, on purpose.
+   *
+   * Allocating a pantry across N dinners without double-spending the protein is
+   * constraint satisfaction — the hardest reasoning in the app. Writing a recipe
+   * from an already-decided ingredient list is not; the eval puts Sonnet at 36/36
+   * with repair, matching Opus.
+   *
+   * So the tiers split by job rather than by app: Opus on the ~400-token call
+   * that does the thinking, Sonnet on the three ~3,000-token calls that do the
+   * writing. Running everything on Opus would add roughly $0.03 per plan for
+   * output quality the eval says is already matched; running the planner on
+   * Sonnet saves ~$0.01 on the one call where being wrong wastes all three
+   * generations downstream.
+   *
+   * MODEL CHOICE IS PER-CALL-SITE, not per-application — models.ts has said so
+   * since it was written, and this is the first feature where the app actually
+   * takes its own advice.
+   */
+  PLAN_MODEL: z.string().default("claude-opus-5"),
+  /** Higher than RECIPE_EFFORT: this is the call whose reasoning gates the rest. */
+  PLAN_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("high"),
+
   // ---- Admission control. See limits/budget.ts for why there are four. ----
   // Burst, per user. Bounds requests, NOT money: cost per turn is not constant.
   RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(10),
