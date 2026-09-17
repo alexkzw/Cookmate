@@ -21,14 +21,26 @@ import { SCORER_HASH } from "../verify/provenance.js";
 export function openTurn(
   userId: string,
   request: CookRequest,
-  meta: { userTurn: string; parentTurnId?: string | null } ,
+  meta: {
+    userTurn: string;
+    parentTurnId?: string | null;
+    /**
+     * The meal plan this turn is one meal of.
+     *
+     * Separate from `parentTurnId` on purpose — see the migration note in
+     * db/index.ts. A plan's turns are siblings in a batch; a follow-up's turns
+     * are a chain, and `conversationHistory` only walks the chain.
+     */
+    planId?: string | null;
+    planDay?: number | null;
+  },
 ): string {
   const id = randomUUID();
   db.prepare(
     `INSERT INTO turns
        (id, user_id, craving, servings, max_minutes, effort, will_shop, pantry_json, cookware_json,
-        user_turn, parent_turn_id, prompt_hash, scorer_hash)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        user_turn, parent_turn_id, prompt_hash, scorer_hash, plan_id, plan_day)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     userId,
@@ -47,6 +59,8 @@ export function openTurn(
     // turns whose provenance you most want — the ones that went wrong.
     promptHash(),
     SCORER_HASH,
+    meta.planId ?? null,
+    meta.planDay ?? null,
   );
   return id;
 }

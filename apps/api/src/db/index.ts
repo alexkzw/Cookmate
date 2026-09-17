@@ -141,6 +141,22 @@ addColumnIfMissing("turns", "error_retryable", "INTEGER");
  */
 addColumnIfMissing("turns", "prompt_hash", "TEXT");
 addColumnIfMissing("turns", "scorer_hash", "TEXT");
+/**
+ * WHICH MEAL PLAN THIS TURN BELONGS TO, if any.
+ *
+ * A meal plan produces N turns — one real generation per meal — and they need
+ * to be linkable, or `/api/stats` reports three unrelated recipes and the true
+ * cost of a plan is unrecoverable from the table.
+ *
+ * DELIBERATELY NOT `parent_turn_id`, which was the obvious place to reach for
+ * and is wrong: `conversationHistory` walks that column backwards to rebuild a
+ * conversation, so hanging plan siblings off it would replay two unrelated
+ * dinners into the third one's prompt as if the user had asked for them. Same
+ * column shape, completely different relationship — siblings in a batch, not a
+ * chain of follow-ups.
+ */
+addColumnIfMissing("turns", "plan_id", "TEXT");
+addColumnIfMissing("turns", "plan_day", "INTEGER");
 // 2 when the repair loop ran. Lets /api/stats separate "right first time" from
 // "rescued", which a single pass rate cannot.
 addColumnIfMissing("turns", "attempts", "INTEGER");
