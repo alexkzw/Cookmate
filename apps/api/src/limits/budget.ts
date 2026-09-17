@@ -101,14 +101,38 @@ function sweep(now: number): void {
  * closer to their limit than they are, and the lease is released as soon as the
  * real number is known. Wrong in the cheap direction.
  */
-export function reserve(userId: string, now: number = Date.now()): () => void {
+export function reserve(
+  userId: string,
+  now: number = Date.now(),
+  /**
+   * How many turns' worth of money this request will spend.
+   *
+   * A meal plan runs one planner call and N generations, so it costs several
+   * times a single recipe — and a cap that counted it as one would let a user
+   * spend 3-4x their daily limit by asking for plans instead of recipes.
+   *
+   * ONE LEASE WITH A BIGGER NUMBER, not N leases, and the distinction is
+   * load-bearing. `inFlight()` counts leases, and it is the concurrency signal:
+   * three leases would make a single meal plan look like three simultaneous
+   * requests and trip MAX_CONCURRENT_PER_USER (2) against the user's own plan,
+   * before it ever reached the model.
+   *
+   * That is the split the two mechanisms were always meant to have. A rate
+   * limit and a concurrency cap bound ACTIONS — a plan is one action a person
+   * took. A cost cap bounds MONEY — a plan is four calls' worth. Counting the
+   * same request differently in the two places is correct precisely because the
+   * two limits defend different things.
+   */
+  units: number = 1,
+): () => void {
   const id = randomUUID();
   leases.set(id, {
     userId,
-    costUsd: config.ESTIMATED_TURN_COST_USD,
+    costUsd: config.ESTIMATED_TURN_COST_USD * units,
     // Generously beyond the worst turn observed on the eval suite (46s), so a
-    // slow-but-alive request is never charged twice.
-    expiresAt: now + 180_000,
+    // slow-but-alive request is never charged twice. A meal plan is several
+    // turns end to end, so its window scales with the work it represents.
+    expiresAt: now + 180_000 * Math.max(1, units),
   });
   let released = false;
   return () => {
