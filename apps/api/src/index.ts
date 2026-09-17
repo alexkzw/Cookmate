@@ -6,6 +6,7 @@ import { logger } from "hono/logger";
 import { existsSync } from "node:fs";
 import { config } from "./config.js";
 import { chatRoutes } from "./routes/chat.js";
+import { planRoutes } from "./routes/plan.js";
 import { pantryRoutes } from "./routes/pantry.js";
 import { feedbackRoutes } from "./routes/feedback.js";
 import { statsRoutes } from "./routes/stats.js";
@@ -148,6 +149,7 @@ app.get("/version", (c) =>
 );
 
 app.route("/api/chat", chatRoutes);
+app.route("/api/plan", planRoutes);
 app.route("/api/pantry", pantryRoutes);
 app.route("/api/feedback", feedbackRoutes);
 app.route("/api/stats", statsRoutes);
